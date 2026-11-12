@@ -37,6 +37,22 @@ public enum NoteNaming {
         return names[pitchClass] + String(octave)
     }
 
+    /// Parses "C4", "F#4", "F♯4", "Bb3", "B♭3", "C-1". Returns nil if it isn't a note name.
+    public static func midiNote(named name: String) -> Int? {
+        var chars = Substring(name.trimmingCharacters(in: .whitespaces))
+        guard let letter = chars.first?.uppercased(), let base = ["C": 0, "D": 2, "E": 4, "F": 5, "G": 7, "A": 9, "B": 11][letter] else {
+            return nil
+        }
+        chars = chars.dropFirst()
+        var offset = 0
+        while let c = chars.first, "#♯b♭".contains(c) {
+            offset += (c == "#" || c == "♯") ? 1 : -1
+            chars = chars.dropFirst()
+        }
+        guard let octave = Int(chars) else { return nil }
+        return (octave + 1) * 12 + base + offset
+    }
+
     /// Nearest equal-tempered note and the offset from it in cents (-50...+50).
     public static func nearestNote(toMIDI midi: Double) -> (note: Int, cents: Double) {
         let note = Int(midi.rounded())

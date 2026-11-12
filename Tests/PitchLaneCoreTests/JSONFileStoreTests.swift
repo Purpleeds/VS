@@ -37,5 +37,13 @@ final class JSONFileStoreTests: XCTestCase {
         let settings = try JSONDecoder().decode(AppSettings.self, from: Data("{}".utf8))
         XCTAssertEqual(settings, AppSettings())
         XCTAssertFalse(settings.debugOverlay)
+        XCTAssertEqual(settings.accidentals, .sharps)
+    }
+
+    func testSettingsAccidentalsRoundTripAndUnknownValueFallsBack() throws {
+        let data = try JSONEncoder().encode(AppSettings(debugOverlay: true, accidentals: .flats))
+        XCTAssertEqual(try JSONDecoder().decode(AppSettings.self, from: data), AppSettings(debugOverlay: true, accidentals: .flats))
+        let odd = try JSONDecoder().decode(AppSettings.self, from: Data(#"{"accidentals":"quarterTones"}"#.utf8))
+        XCTAssertEqual(odd.accidentals, .sharps)
     }
 }

@@ -10,16 +10,64 @@ settings JSON persistence, placeholder home (Play / Library / Tuner / Settings),
 
 ## 1. Pitch engine
 
-Goal: a trustworthy real-time pitch reading from the microphone.
+Goal: a trustworthy real-time pitch reading from the microphone: accurate, fast, stable.
 
-- Core: monophonic pitch detector (YIN or MPM) over `[Float]` frames: frequency, confidence/clarity,
-  voiced/unvoiced gate (RMS + clarity), octave-error guard, smoothing/median filter, Hz -> MIDI -> cents,
-  note names. Synthetic-signal tests (sine, harmonics, noise, silence, vocal range ~80-1000 Hz).
-- App: `AVAudioEngine` input tap, `AVAudioSession` (`.playAndRecord`, measurement-friendly mode), mic permission
-  flow, interruption/route-change handling (all logged, no raw audio logged).
-- Tuner screen: big note name, cents needle, live frequency, debug overlay line with detection rate.
-- Phone checklist: permission prompt wording, sustained note reads stable, octave jumps rare, silence shows no
-  pitch, works with and without headphones, survives a phone call / backgrounding.
+### Design
+
+```
+mic -> AVAudioEngine input tap (audio thread, ~1024 frames)
+    -> AudioCaptureRing (lock-free SPSC, drop + count on overflow)       [app]
+    -> analysis serial queue (woken by a DispatchSource, never the audio thread)
+    -> PitchPipeline                                                     [Core]
+         StreamingResampler  44.1/48 kHz -> 16 kHz (6th-order Butterworth LPF @ 5.5 kHz + linear interp)
+         sliding 492-sample window (30.75 ms), hop 160 samples (10 ms => 100 frames/s)
+         PitchDetector (YIN)  -> Hz, confidence = 1 - CMNDF(tau), RMS
+         PitchStabilizer      -> gate, confidence, octave guard, 5-frame median
+         PitchFrame           -> Hz, MIDI (Double), nearest note name, cents, confidence, RMS/dBFS
+    -> main actor (batched per drain) -> Tuner UI, debug overlay
+    -> PitchSessionStats -> AppLog summaries (no audio)
+```
+
+**Why YIN over MPM:** both are time-domain and suit monophonic voice. YIN's absolute-threshold rule
+("first dip below 0.15") is what keeps it off sub-octaves for harmonic-rich signals, its CMNDF value gives a
+calibrated confidence for free, and it is simple to make fast with plain pointer loops. MPM's advantage
+(fewer octave-up errors on very bright timbres) is covered by the stabilizer's octave guard.
+
+**Detector details (prototyped in Python before porting, numbers from that prototype):**
+- Range: configurable, default C2-C6 (65.4-1046.5 Hz). At 16 kHz: lags 15...246, window W = 246.
+- Difference function with 4 parallel accumulators over `UnsafeBufferPointer` (O(W x maxLag) ~ 60k MACs/frame).
+- Threshold search starts at lag 2, below the range: a periodic dip shorter than the minimum lag means the
+  pitch is above range (e.g. whistling at 2 kHz) and is reported as such, not folded to a sub-octave.
+- Parabolic interpolation on the raw difference function (worst sine error 0.5 c vs 3.9 c on CMNDF).
+- Prototype results: sines C2-C6 at 44.1/48 kHz within 0.5 c; saw/square within 4 c, no octave errors;
+  white noise confidence <= 0.30; 300 Hz-lowpassed "fan" noise <= 0.78 (so the voiced threshold is 0.85).
+
+**Stabilizer (in this order):**
+1. RMS noise gate, default -50 dBFS.
+2. Above-range dip -> unvoiced (`outOfRange`).
+3. Confidence < 0.85 -> unvoiced (`lowConfidence`).
+4. Octave guard: a jump of >= 9 semitones from the current median is held back (`pendingJump`, unvoiced)
+   until 3 consecutive frames agree within 1.5 semitones; then the history is replaced and it is accepted.
+5. 5-frame median of accepted MIDI values (adds ~20 ms lag; removes single-frame spikes).
+6. 3 unvoiced frames in a row clear the history, so a new note after a gap starts fresh.
+When unsure the frame is unvoiced, so the cursor hides instead of jumping.
+
+**Latency budget:** window centre is ~15 ms old when analysed, the median adds ~20 ms, plus I/O buffering.
+Measured and compensated in step 4.
+
+### Deliverables
+- Core: `NoteNaming` (accidental always on the note: F♯4 / B♭3, sharps-or-flats setting), `PitchMath`,
+  `Biquad`, `StreamingResampler`, `PitchDetector`, `PitchStabilizer`, `PitchPipeline`, `PitchHistory` +
+  `PitchGraphScale` (5 s graph), `PitchSessionStats` (log summaries), settings `accidentals`.
+- Tests at 44.1 and 48 kHz: sine sweep C2-C6 (+/-5 c), saw/square (no octave errors), 5 Hz vibrato,
+  silence + white noise + fan-like noise (unvoiced), whistle above range (unvoiced), octave glide up and down,
+  stabilizer unit tests, resampler response + chunking invariance, speed test.
+- App: `AudioInput` (session `.playAndRecord` / `.measurement`, tap, permission, interruptions, route and
+  engine-configuration changes, media-services reset), `PitchAnalyzer` (ring buffer + serial queue),
+  Tuner screen (note, Hz, cents needle, confidence bar, level meter, 5 s scrolling graph), debug overlay
+  (analysis time/frame, frames/s, dropped buffers), sharps/flats in Settings.
+- Phone checklist: sing a slow scale, hold a note with vibrato, whistle, stay silent near a fan or TV,
+  then paste the Logs.
 
 ## 2. Song format + importers
 

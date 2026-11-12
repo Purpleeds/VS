@@ -4,17 +4,22 @@ import Foundation
 /// so adding a setting never invalidates an existing file.
 public struct AppSettings: Codable, Equatable, Sendable {
     public var debugOverlay: Bool
+    /// Spelling for black-key note names (F♯ vs G♭).
+    public var accidentals: Accidentals
 
-    public init(debugOverlay: Bool = false) {
+    public init(debugOverlay: Bool = false, accidentals: Accidentals = .sharps) {
         self.debugOverlay = debugOverlay
+        self.accidentals = accidentals
     }
 
     private enum CodingKeys: String, CodingKey {
         case debugOverlay
+        case accidentals
     }
 
     public init(from decoder: Decoder) throws {
         let container = try decoder.container(keyedBy: CodingKeys.self)
         self.debugOverlay = try container.decodeIfPresent(Bool.self, forKey: .debugOverlay) ?? false
+        self.accidentals = (try? container.decodeIfPresent(Accidentals.self, forKey: .accidentals)) ?? .sharps
     }
 }

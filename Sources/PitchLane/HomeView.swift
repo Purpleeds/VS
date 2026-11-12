@@ -1,5 +1,6 @@
 #if canImport(SwiftUI)
 import SwiftUI
+import PitchLaneCore
 
 enum Route: Hashable {
     case play, library, tuner, settings, logs

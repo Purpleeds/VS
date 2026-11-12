@@ -1,5 +1,6 @@
 #if canImport(SwiftUI)
 import SwiftUI
+import PitchLaneCore
 
 /// Small always-on-top readout, toggled in Settings. Later steps add pitch/latency/fps lines here.
 struct DebugOverlay: ViewModifier {

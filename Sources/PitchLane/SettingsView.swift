@@ -1,5 +1,6 @@
 #if canImport(SwiftUI)
 import SwiftUI
+import PitchLaneCore
 
 struct SettingsView: View {
     @EnvironmentObject private var model: SettingsModel

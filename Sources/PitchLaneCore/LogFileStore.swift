@@ -99,7 +99,7 @@ public final class LogFileStore: @unchecked Sendable {
                 lastErrorStorage = "rotate failed: \(error)"
             }
         }
-        fileManager.createFile(atPath: currentURL.path, contents: Data())
+        _ = fileManager.createFile(atPath: currentURL.path, contents: Data())
         currentSize = 0
         writeStateLocked(Self.runningMarker)
         return status
@@ -146,7 +146,7 @@ public final class LogFileStore: @unchecked Sendable {
         do {
             if !fileManager.fileExists(atPath: currentURL.path) {
                 try fileManager.createDirectory(at: directory, withIntermediateDirectories: true)
-                fileManager.createFile(atPath: currentURL.path, contents: Data())
+                _ = fileManager.createFile(atPath: currentURL.path, contents: Data())
                 currentSize = 0
             }
             let handle = try FileHandle(forWritingTo: currentURL)

@@ -1,5 +1,6 @@
 #if canImport(SwiftUI)
 import AVFoundation
+import QuartzCore
 import SwiftUI
 import PitchLaneCore
 
@@ -50,6 +51,11 @@ final class AudioInput: ObservableObject {
     private var tapSampleRate: Double = 0
     private var observers: [NSObjectProtocol] = []
     private var isStarting = false
+    /// Screens that want every pitch frame (the game), keyed by name. Called on the main actor with the
+    /// batch and its arrival host time.
+    private var frameListeners: [String: (PitchAnalyzer.Batch, Double) -> Void] = [:]
+    private var clickPlayer: AVAudioPlayerNode?
+    private var clickBuffer: AVAudioPCMBuffer?
 
     init() {
         analyzer.setDelivery { [weak self] batch in
@@ -82,6 +88,57 @@ final class AudioInput: ObservableObject {
         AppLog.info("Audio retry requested", category: "audio")
         if case .failed = state { state = .idle }
         await startIfNeeded(reason: "retry")
+    }
+
+    func addFrameListener(_ name: String, _ handler: @escaping (PitchAnalyzer.Batch, Double) -> Void) {
+        frameListeners[name] = handler
+    }
+
+    func removeFrameListener(_ name: String) {
+        frameListeners[name] = nil
+    }
+
+    // MARK: Click track
+
+    /// Plays a click at an exact host time (seconds on the `CACurrentMediaTime` clock).
+    func scheduleClick(atHostTime seconds: Double) {
+        guard let clickPlayer, let clickBuffer, engine.isRunning else { return }
+        let time = AVAudioTime(hostTime: AVAudioTime.hostTime(forSeconds: seconds))
+        clickPlayer.scheduleBuffer(clickBuffer, at: time, options: [], completionHandler: nil)
+    }
+
+    /// Drops every scheduled click (pause, quit).
+    func cancelClicks() {
+        guard let clickPlayer, engine.isRunning else { return }
+        clickPlayer.stop()
+        clickPlayer.play()
+    }
+
+    private func attachClickPlayer() {
+        let player = clickPlayer ?? AVAudioPlayerNode()
+        if clickPlayer == nil {
+            engine.attach(player)
+            clickPlayer = player
+        }
+        let outputRate = engine.outputNode.outputFormat(forBus: 0).sampleRate
+        let rate = outputRate > 0 ? outputRate : 48_000
+        guard let format = AVAudioFormat(standardFormatWithSampleRate: rate, channels: 1) else { return }
+        engine.connect(player, to: engine.mainMixerNode, format: format)
+        clickBuffer = Self.makeClick(format: format)
+    }
+
+    /// 25 ms decaying 2.5 kHz blip: above the C2-C6 pitch range, so the mic doesn't score it as a note.
+    private static func makeClick(format: AVAudioFormat) -> AVAudioPCMBuffer? {
+        let frames = AVAudioFrameCount(format.sampleRate * 0.025)
+        guard let buffer = AVAudioPCMBuffer(pcmFormat: format, frameCapacity: frames),
+              let channel = buffer.floatChannelData?[0] else { return nil }
+        buffer.frameLength = frames
+        let rate = format.sampleRate
+        for i in 0..<Int(frames) {
+            let t = Double(i) / rate
+            channel[i] = Float(0.5 * sin(2 * Double.pi * 2_500 * t) * exp(-t * 180))
+        }
+        return buffer
     }
 
     func setAccidentals(_ accidentals: Accidentals) {
@@ -210,8 +267,10 @@ final class AudioInput: ObservableObject {
         input.removeTap(onBus: 0)
         input.installTap(onBus: 0, bufferSize: 1_024, format: format, block: analyzer.makeTapBlock())
         tapSampleRate = format.sampleRate
+        attachClickPlayer()
         engine.prepare()
         try engine.start()
+        clickPlayer?.play()
 
         history.removeAll()
         latest = nil
@@ -251,6 +310,12 @@ final class AudioInput: ObservableObject {
         let range = PitchGraphScale.range(for: updated, current: graphRange, bounds: Self.displayBounds)
         if range != graphRange {
             graphRange = range
+        }
+        if !frameListeners.isEmpty {
+            let arrival = CACurrentMediaTime()
+            for listener in frameListeners.values {
+                listener(batch, arrival)
+            }
         }
     }
 
@@ -343,6 +408,8 @@ final class AudioInput: ObservableObject {
         tapSampleRate = 0
         analyzer.stop()
         engine = AVAudioEngine()
+        clickPlayer = nil
+        clickBuffer = nil
         state = .idle
         diagnostics.setRunning(false)
         if wasActive {

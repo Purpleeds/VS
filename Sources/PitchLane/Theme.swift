@@ -17,5 +17,7 @@ enum Theme {
     static let warn = Color(red: 1.00, green: 0.78, blue: 0.28)
     /// Off.
     static let bad = Color(red: 1.00, green: 0.38, blue: 0.38)
+    static let gold = Color(red: 1.00, green: 0.82, blue: 0.30)
+    static let lane = Color(red: 0.06, green: 0.07, blue: 0.12)
 }
 #endif

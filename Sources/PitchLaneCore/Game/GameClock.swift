@@ -54,6 +54,13 @@ public struct GameClock: Sendable, Equatable {
         isPaused = false
     }
 
+    /// True while song time is actually moving (started, not paused, not in a resume countdown).
+    /// Pitch frames are only scored while this holds.
+    public func isAdvancing(at host: Double) -> Bool {
+        guard let anchorHost, !isPaused else { return false }
+        return host >= anchorHost
+    }
+
     public func phase(at host: Double) -> Phase {
         guard let anchorHost else { return .notStarted }
         if isPaused { return .paused }

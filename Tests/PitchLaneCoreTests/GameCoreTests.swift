@@ -37,6 +37,18 @@ final class GameClockTests: XCTestCase {
         XCTAssertEqual(clock.phase(at: 113 + 10.5), .finished)
     }
 
+    func testIsAdvancing() {
+        var clock = GameClock(songDuration: 5)
+        XCTAssertFalse(clock.isAdvancing(at: 0))
+        clock.start(at: 10)
+        XCTAssertTrue(clock.isAdvancing(at: 10.5), "song time runs during the start countdown")
+        clock.pause(at: 11)
+        XCTAssertFalse(clock.isAdvancing(at: 12))
+        clock.resume(at: 12)
+        XCTAssertFalse(clock.isAdvancing(at: 14), "frozen during the resume countdown")
+        XCTAssertTrue(clock.isAdvancing(at: 15.1))
+    }
+
     func testResumeWithoutPauseIsIgnored() {
         var clock = GameClock(songDuration: 5)
         clock.start(at: 0)

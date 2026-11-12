@@ -23,6 +23,7 @@ struct LibraryView: View {
 
     @EnvironmentObject private var library: LibraryModel
     @EnvironmentObject private var settings: SettingsModel
+    @EnvironmentObject private var scores: ScoreStore
     @State private var query = ""
     @State private var selection: LibrarySelection?
     @State private var showImporter = false
@@ -123,7 +124,10 @@ struct LibraryView: View {
                 }
             }
             .onDelete { offsets in
-                for index in offsets { library.delete(songs[index]) }
+                for index in offsets {
+                    scores.forget(songID: songs[index].id)
+                    library.delete(songs[index])
+                }
             }
         }
     }
@@ -200,6 +204,7 @@ struct SongDetailSheet: View {
 
     @EnvironmentObject private var library: LibraryModel
     @EnvironmentObject private var settings: SettingsModel
+    @EnvironmentObject private var scores: ScoreStore
     @Environment(\.dismiss) private var dismiss
     @State private var difficulty: Difficulty = .normal
     @State private var showAudioImporter = false
@@ -262,6 +267,9 @@ struct SongDetailSheet: View {
                 Text(difficultyHint)
                     .font(.caption)
                     .foregroundStyle(Theme.textSecondary)
+                if let best = scores.best(songID: song.id, difficulty: difficulty) {
+                    LabeledContent("Personal best", value: "\(best.score) · \(best.grade.rawValue) · \(Int((best.accuracy * 100).rounded()))%")
+                }
             }
             Section("Song") {
                 LabeledContent("Range", value: summary.rangeText(accidentals: accidentals))
@@ -273,6 +281,13 @@ struct SongDetailSheet: View {
                 LabeledContent("Golden notes", value: "\(summary.goldenCount)")
                 if song.source != .builtIn {
                     LabeledContent("Backing audio", value: song.backingAudioFile == nil ? "None" : "Attached")
+                }
+            }
+            if onPlay != nil {
+                Section("Game options") {
+                    Toggle("Any octave counts", isOn: $settings.settings.octaveAgnostic)
+                    Toggle("Click track", isOn: $settings.settings.clickTrack)
+                    Toggle("Note names on notes", isOn: $settings.settings.showNoteNames)
                 }
             }
             if let onPlay {
@@ -303,6 +318,7 @@ struct SongDetailSheet: View {
         }
         .confirmationDialog("Delete \"\(song.title)\"?", isPresented: $confirmDelete, titleVisibility: .visible) {
             Button("Delete", role: .destructive) {
+                scores.forget(songID: song.id)
                 library.delete(song)
                 dismiss()
             }

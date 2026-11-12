@@ -23,6 +23,9 @@ private struct DebugOverlayPanel: View {
         let s = diagnostics.snapshot
         VStack(alignment: .leading, spacing: 1) {
             Text("DEBUG \(BuildInfo.current.display)")
+            if let fps = s.gameFPS {
+                Text("game \(f(fps, 0)) fps · worst \(f(s.gameWorstFrameMs, 1)) ms")
+            }
             if s.isRunning {
                 Text("analysis \(f(s.analysisAverageMs, 3)) ms avg · \(f(s.analysisMaxMs, 3)) max")
                 Text("frames \(f(s.framesPerSecond, 1))/s · dropped \(s.droppedBuffers)")

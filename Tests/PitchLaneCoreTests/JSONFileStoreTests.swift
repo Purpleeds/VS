@@ -38,6 +38,10 @@ final class JSONFileStoreTests: XCTestCase {
         XCTAssertEqual(settings, AppSettings())
         XCTAssertFalse(settings.debugOverlay)
         XCTAssertEqual(settings.accidentals, .sharps)
+        XCTAssertEqual(settings.lastDifficulty, .normal)
+        XCTAssertTrue(settings.octaveAgnostic, "octave-agnostic scoring defaults to on")
+        XCTAssertFalse(settings.clickTrack)
+        XCTAssertFalse(settings.showNoteNames)
     }
 
     func testSettingsAccidentalsRoundTripAndUnknownValueFallsBack() throws {

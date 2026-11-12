@@ -2,8 +2,14 @@
 import SwiftUI
 import PitchLaneCore
 
+struct GameRoute: Hashable {
+    var songID: String
+    var difficulty: Difficulty
+}
+
 enum Route: Hashable {
     case play, library, tuner, settings, logs
+    case game(GameRoute)
 
     var name: String {
         switch self {
@@ -12,6 +18,7 @@ enum Route: Hashable {
         case .tuner: return "tuner"
         case .settings: return "settings"
         case .logs: return "logs"
+        case .game(let route): return "game(\(route.songID), \(route.difficulty.rawValue))"
         }
     }
 }
@@ -60,8 +67,9 @@ struct HomeView: View {
             .toolbar(.hidden, for: .navigationBar)
             .navigationDestination(for: Route.self) { route in
                 switch route {
-                case .play: PlayView()
-                case .library: LibraryView(title: "Library")
+                case .play: LibraryView(title: "Choose a Song", onPlay: play)
+                case .library: LibraryView(title: "Library", onPlay: play)
+                case .game(let route): GameScreen(route: route)
                 case .tuner: TunerView()
                 case .settings: SettingsView()
                 case .logs: LogsView()
@@ -71,6 +79,14 @@ struct HomeView: View {
         .tint(Theme.accent)
         .onChange(of: path) { _, newPath in
             AppLog.info("Navigation: \(newPath.map(\.name).joined(separator: " > "))", category: "ui")
+        }
+    }
+
+    /// Starts a game once the song sheet has finished dismissing.
+    private func play(_ song: Song, _ difficulty: Difficulty) {
+        Task { @MainActor in
+            try? await Task.sleep(for: .milliseconds(350))
+            path.append(.game(GameRoute(songID: song.id, difficulty: difficulty)))
         }
     }
 

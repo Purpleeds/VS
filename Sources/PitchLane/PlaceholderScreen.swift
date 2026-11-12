@@ -28,11 +28,4 @@ struct PlaceholderScreen: View {
     }
 }
 
-struct PlayView: View {
-    var body: some View {
-        PlaceholderScreen(title: "Play", symbol: "music.note", note: "Game screen (landscape). Coming soon.")
-            .lockOrientation(.landscape)
-    }
-}
-
 #endif

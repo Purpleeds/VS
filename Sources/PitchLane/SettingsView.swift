@@ -18,6 +18,15 @@ struct SettingsView: View {
                     Text("Flats (D♭, G♭)").tag(Accidentals.flats)
                 }
             }
+            Section {
+                Toggle("Any octave counts", isOn: $model.settings.octaveAgnostic)
+                Toggle("Click track", isOn: $model.settings.clickTrack)
+                Toggle("Note names on notes", isOn: $model.settings.showNoteNames)
+            } header: {
+                Text("Game")
+            } footer: {
+                Text("Any octave counts lets low and high voices sing every song. The click track is easiest to follow with headphones.")
+            }
             Section("Developer") {
                 Toggle("Debug overlay", isOn: $model.settings.debugOverlay)
                 NavigationLink(value: Route.logs) {

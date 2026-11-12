@@ -7,12 +7,14 @@ struct PitchLaneApp: App {
     @StateObject private var settings: SettingsModel
     @StateObject private var audio: AudioInput
     @StateObject private var library: LibraryModel
+    @StateObject private var scores: ScoreStore
 
     init() {
         AppLog.bootstrap()
         _settings = StateObject(wrappedValue: SettingsModel())
         _audio = StateObject(wrappedValue: AudioInput())
         _library = StateObject(wrappedValue: LibraryModel())
+        _scores = StateObject(wrappedValue: ScoreStore())
     }
 
     var body: some Scene {
@@ -22,6 +24,7 @@ struct PitchLaneApp: App {
                 .environmentObject(audio)
                 .environmentObject(audio.diagnostics)
                 .environmentObject(library)
+                .environmentObject(scores)
                 .preferredColorScheme(.dark)
         }
     }

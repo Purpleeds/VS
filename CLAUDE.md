@@ -89,6 +89,19 @@ Runs on every push and PR:
   Built-ins are generated in code (`BuiltInSongs`), never stored, and must stay original (no copyrighted songs or
   lyrics).
 
+## Game (step 3)
+
+- One master clock: `GameClock` (Core) maps `CACurrentMediaTime()` to song time (runs from -3 s during the
+  countdown; pause freezes; resume holds for a 3-2-1). Render from `clock.songTime(at: now)` every frame;
+  never count frames. Pitch frames map to song time via `StreamClockMapper` minus `GameSession.pitchLatency`.
+- Scoring rules live only in Core `ScoreKeeper` (tolerance per difficulty, octave-agnostic default ON, ratings,
+  golden x2, combo/multiplier, accuracy, grade) and are unit-tested; the app never re-implements them.
+- The lane is `TimelineView(.animation)` + one `Canvas` (`LaneRenderer`). Inside the renderer: no `@Published`
+  writes (dispatch them), no allocation-heavy work, use `NoteIndex` for visible notes. HUD values are published
+  only when a note ends. Game fps goes to the debug overlay via `AudioDiagnostics.setGameFrameStats`.
+- Canvas closures that touch main-actor state wrap their body in `MainActor.assumeIsolated`.
+- Personal bests: `Application Support/PitchLane/personal-bests.json` (`ScoreStore`).
+
 ## Versioning
 
 - `CFBundleShortVersionString` = marketing version; `CFBundleVersion` = integer build number.

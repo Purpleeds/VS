@@ -183,7 +183,7 @@ enum LaneRenderer {
         }
 
         // Countdown (start and resume).
-        if let count = session.clock.countdown(at: host), session.phase == .running {
+        if let count = session.countdown(atHost: host) {
             let text = Text("\(count)")
                 .font(.system(size: 96, weight: .heavy, design: .rounded))
                 .foregroundStyle(Theme.textPrimary.opacity(0.9))

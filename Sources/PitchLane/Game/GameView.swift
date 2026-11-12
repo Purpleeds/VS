@@ -6,6 +6,7 @@ import PitchLaneCore
 /// The landscape game screen.
 struct GameView: View {
     let song: Song
+    let backingURL: URL?
     let options: GameOptions
 
     @StateObject private var session: GameSession
@@ -15,9 +16,11 @@ struct GameView: View {
     @Environment(\.dismiss) private var dismiss
     @Environment(\.scenePhase) private var scenePhase
     @State private var started = false
+    @State private var showRouteWarning = true
 
-    init(song: Song, options: GameOptions) {
+    init(song: Song, backingURL: URL?, options: GameOptions) {
         self.song = song
+        self.backingURL = backingURL
         self.options = options
         _session = StateObject(wrappedValue: GameSession(song: song, options: options))
     }
@@ -36,8 +39,12 @@ struct GameView: View {
             } else {
                 lane
                 GameHUD(session: session) { session.pause(reason: "pause button") }
+                if showRouteWarning, let warning = routeWarning {
+                    RouteWarningBanner(text: warning) { showRouteWarning = false }
+                }
                 if session.phase == .paused {
                     PauseMenu(
+                        session: session,
                         onResume: { session.resume() },
                         onRestart: { session.restart() },
                         onQuit: { dismiss() }
@@ -53,26 +60,49 @@ struct GameView: View {
             await audio.acquire("game")
             if audio.state == .running, !started {
                 started = true
-                session.begin(audio: audio, scores: scores)
+                session.begin(audio: audio, scores: scores, backingURL: backingURL)
             }
         }
         .onChange(of: audio.state) { _, state in
             switch state {
-            case .interrupted:
-                session.pause(reason: "audio interrupted")
             case .running where !started:
                 started = true
-                session.begin(audio: audio, scores: scores)
-            default:
+                session.begin(audio: audio, scores: scores, backingURL: backingURL)
+            case .running:
                 break
+            default:
+                session.pause(reason: "audio \(state)")
             }
         }
         .onChange(of: scenePhase) { _, phase in
             if phase != .active { session.pause(reason: "app \(phase == .background ? "backgrounded" : "inactive")") }
         }
+        .onChange(of: audio.routeKind) { _, _ in
+            showRouteWarning = true
+        }
+        .task(id: showRouteWarning) {
+            guard showRouteWarning else { return }
+            if let warning = routeWarning {
+                AppLog.info("Route warning shown: \(warning)", category: "game")
+            }
+            try? await Task.sleep(for: .seconds(8))
+            showRouteWarning = false
+        }
         .onDisappear {
             session.end()
             audio.release("game")
+        }
+    }
+
+    private var routeWarning: String? {
+        switch audio.routeKind {
+        case .speaker:
+            return "Headphones work best: on the speaker, the guide tone and backing leak into the mic and can be scored as your voice."
+        case .bluetooth:
+            let calibrated = audio.latencyStore.profiles[.bluetooth].isCalibrated
+            return "Bluetooth adds delay\(calibrated ? "" : ". Calibrate in Settings > Latency for this route") (wired headphones are tighter)."
+        case .wired, .other:
+            return nil
         }
     }
 
@@ -85,7 +115,7 @@ struct GameView: View {
     }
 
     private var lane: some View {
-        TimelineView(.animation(minimumInterval: nil, paused: session.phase == .paused)) { _ in
+        TimelineView(.animation(minimumInterval: nil, paused: session.phase == .paused || session.phase == .finished)) { _ in
             Canvas { context, size in
                 MainActor.assumeIsolated {
                     let host = CACurrentMediaTime()
@@ -164,33 +194,109 @@ struct GameHUD: View {
 }
 
 struct PauseMenu: View {
+    @ObservedObject var session: GameSession
     let onResume: () -> Void
     let onRestart: () -> Void
     let onQuit: () -> Void
 
+    @EnvironmentObject private var settings: SettingsModel
+
     var body: some View {
         ZStack {
             Color.black.opacity(0.55).ignoresSafeArea()
-            VStack(spacing: 14) {
-                Text("Paused")
-                    .font(.largeTitle.weight(.heavy))
-                    .foregroundStyle(Theme.textPrimary)
-                Button(action: onResume) {
-                    Label("Resume", systemImage: "play.fill").frame(width: 200)
+            HStack(alignment: .top, spacing: 28) {
+                VStack(spacing: 14) {
+                    Text("Paused")
+                        .font(.largeTitle.weight(.heavy))
+                        .foregroundStyle(Theme.textPrimary)
+                    Button(action: onResume) {
+                        Label("Resume", systemImage: "play.fill").frame(width: 190)
+                    }
+                    .buttonStyle(.borderedProminent)
+                    Button(action: onRestart) {
+                        Label("Restart", systemImage: "arrow.counterclockwise").frame(width: 190)
+                    }
+                    .buttonStyle(.bordered)
+                    Button(role: .destructive, action: onQuit) {
+                        Label("Quit", systemImage: "xmark").frame(width: 190)
+                    }
+                    .buttonStyle(.bordered)
                 }
-                .buttonStyle(.borderedProminent)
-                Button(action: onRestart) {
-                    Label("Restart", systemImage: "arrow.counterclockwise").frame(width: 200)
+                .controlSize(.large)
+                VStack(alignment: .leading, spacing: 12) {
+                    Toggle("Guide tone", isOn: Binding(
+                        get: { session.guideOn },
+                        set: { on in
+                            session.setGuide(on)
+                            settings.settings.setGuide(on, for: session.options.difficulty)
+                        }
+                    ))
+                    VolumeSlider(title: "Guide volume", symbol: "tuningfork", value: Binding(
+                        get: { settings.settings.guideVolume },
+                        set: { value in
+                            settings.settings.guideVolume = value
+                            session.setGuideVolume(value)
+                        }
+                    ))
+                    .disabled(!session.guideOn)
+                    if session.hasBacking {
+                        VolumeSlider(title: "Backing volume", symbol: "music.note", value: Binding(
+                            get: { settings.settings.backingVolume },
+                            set: { value in
+                                settings.settings.backingVolume = value
+                                session.setBackingVolume(value)
+                            }
+                        ))
+                    }
                 }
-                .buttonStyle(.bordered)
-                Button(role: .destructive, action: onQuit) {
-                    Label("Quit", systemImage: "xmark").frame(width: 200)
-                }
-                .buttonStyle(.bordered)
+                .frame(width: 240)
+                .foregroundStyle(Theme.textPrimary)
             }
-            .controlSize(.large)
-            .padding(28)
+            .padding(26)
             .background(Theme.surface, in: RoundedRectangle(cornerRadius: 20, style: .continuous))
+        }
+    }
+}
+
+struct VolumeSlider: View {
+    let title: String
+    let symbol: String
+    @Binding var value: Double
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 2) {
+            HStack {
+                Label(title, systemImage: symbol)
+                Spacer()
+                Text("\(Int((value * 100).rounded()))%").monospacedDigit()
+            }
+            .font(.subheadline)
+            Slider(value: $value, in: 0...1)
+        }
+    }
+}
+
+struct RouteWarningBanner: View {
+    let text: String
+    let onDismiss: () -> Void
+
+    var body: some View {
+        VStack {
+            Spacer()
+            HStack(spacing: 10) {
+                Image(systemName: "headphones")
+                Text(text)
+                    .font(.footnote.weight(.medium))
+                    .fixedSize(horizontal: false, vertical: true)
+                Button("OK", action: onDismiss)
+                    .font(.footnote.weight(.bold))
+            }
+            .foregroundStyle(Theme.textPrimary)
+            .padding(.horizontal, 14)
+            .padding(.vertical, 8)
+            .background(Theme.surfaceHighlight.opacity(0.95), in: Capsule())
+            .frame(maxWidth: 640)
+            .padding(.bottom, 10)
         }
     }
 }

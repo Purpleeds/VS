@@ -102,6 +102,25 @@ Runs on every push and PR:
 - Canvas closures that touch main-actor state wrap their body in `MainActor.assumeIsolated`.
 - Personal bests: `Application Support/PitchLane/personal-bests.json` (`ScoreStore`).
 
+## Playback and latency (step 4)
+
+- One `AVAudioEngine` (owned by `AudioInput`) for mic + playback: input tap, click player, guide
+  `AVAudioSourceNode` (`GuideVoice` + Core `GuideToneRenderer`), backing `AVAudioPlayerNode` ->
+  `AVAudioUnitTimePitch` (rate 1; practice speed later) -> main mixer. Session `.playAndRecord` / `.measurement`
+  with `.defaultToSpeaker` + `.allowBluetoothA2DP`; voice processing (echo cancel / AGC) must stay off (logged).
+- **Master clock = audio output timeline.** The guide voice's render callback publishes (sample time, host time)
+  every cycle; `SongTimebase` runs the `GameClock` in output-render seconds. The lane shows what is heard:
+  `songTime(render(now) - outputLatency)`. Guide, backing and clicks are placed on the same timeline; never
+  start audio "now" or count frames.
+- Mic frames carry exact capture times (tap `AVAudioTime` -> `PitchAnalyzer.CaptureAnchor`). Frame song time =
+  `songTime(render(capture - inputLatency) - outputLatency) - correction - pitchLatency`.
+- Latency = `AVAudioSession` input/output latency + per-route correction (calibration + nudge) stored in
+  `Application Support/PitchLane/latency.json` (`LatencyStore`, keyed by `AudioRouteKind`: speaker / wired /
+  Bluetooth / other). Calibration (Settings > Latency) measures clap/beep onsets with Core `LatencyCalibrator`.
+- Render-thread rules: `GuideVoice` reads only atomics (`Synchronization.Atomic`, `WordPair`) and a renderer handed
+  over by an atomic slot flip; `GuideToneRenderer.render` never allocates/locks/logs.
+- Speaker route: warn that guide/backing leak into the mic. Bluetooth: warn about delay, suggest calibrating.
+
 ## Versioning
 
 - `CFBundleShortVersionString` = marketing version; `CFBundleVersion` = integer build number.

@@ -12,11 +12,14 @@ struct GameScreen: View {
 
     var body: some View {
         if let song = library.song(withID: route.songID) {
-            GameView(song: song, options: GameOptions(
+            GameView(song: song, backingURL: library.backingAudioURL(for: song), options: GameOptions(
                 difficulty: route.difficulty,
                 octaveAgnostic: settings.settings.octaveAgnostic,
                 clickTrack: settings.settings.clickTrack,
-                showNoteNames: settings.settings.showNoteNames
+                showNoteNames: settings.settings.showNoteNames,
+                guideTone: settings.settings.guideEnabled(for: route.difficulty),
+                guideVolume: settings.settings.guideVolume,
+                backingVolume: settings.settings.backingVolume
             ))
         } else {
             VStack(spacing: 12) {

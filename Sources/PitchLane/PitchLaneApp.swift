@@ -23,6 +23,7 @@ struct PitchLaneApp: App {
                 .environmentObject(settings)
                 .environmentObject(audio)
                 .environmentObject(audio.diagnostics)
+                .environmentObject(audio.latencyStore)
                 .environmentObject(library)
                 .environmentObject(scores)
                 .preferredColorScheme(.dark)

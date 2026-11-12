@@ -1,0 +1,131 @@
+#if canImport(SwiftUI)
+import Foundation
+import QuartzCore
+import PitchLaneCore
+
+/// Song clock on the audio output timeline.
+///
+/// - The `GameClock` runs in *output render seconds* (output sample time / rate), published by the guide voice's
+///   render callback, so the lane, guide tone, backing track and clicks all share one clock and never drift.
+/// - What the player hears now was rendered `latency.output` ago: the lane shows `songTime(render(now) - output)`.
+/// - A mic frame captured at host time h was sung at h - `latency.input`; it lands on the song at
+///   `songTime(render(h - input) - output) - correction` (correction = per-route calibration + nudge).
+@MainActor
+final class SongTimebase {
+    private(set) var clock: GameClock
+    private(set) var latency: LatencyEstimate = .zero
+    private weak var audio: AudioInput?
+    private let songDuration: Double
+    private let leadIn: Double
+    private var captureOffset: Double?
+    private var fallbackMapper = StreamClockMapper()
+
+    init(audio: AudioInput, songDuration: Double, leadIn: Double = 3) {
+        self.audio = audio
+        self.songDuration = songDuration
+        self.leadIn = leadIn
+        clock = GameClock(songDuration: songDuration, leadIn: leadIn)
+    }
+
+    var isStarted: Bool { clock.isStarted }
+
+    /// Output render seconds now, if the output clock is running.
+    func renderNow() -> Double? {
+        audio?.renderSeconds(atHost: CACurrentMediaTime())
+    }
+
+    /// Starts the countdown. Returns false until the output clock is available.
+    @discardableResult
+    func start() -> Bool {
+        guard let audio, let render = renderNow() else { return false }
+        latency = audio.latency
+        clock = GameClock(songDuration: songDuration, leadIn: leadIn)
+        clock.start(at: render + 0.05)
+        publish()
+        return true
+    }
+
+    /// Freezes at what the player is hearing now.
+    func pause() {
+        guard let render = renderNow() else { return }
+        clock.pause(at: render - latency.output)
+        publish()
+    }
+
+    /// Continues after the resume countdown, on the current output timeline (also after an engine restart).
+    func resume() {
+        guard let audio, let render = renderNow() else { return }
+        latency = audio.latency
+        clock.resume(at: render)
+        publish()
+    }
+
+    func stop() {
+        audio?.stopGuideTimeline()
+    }
+
+    /// Hands the clock's anchor to the guide voice on the render thread.
+    func publish() {
+        guard let anchor = clock.anchor else { return }
+        audio?.setGuideTimeline(anchorRender: anchor.time, anchorSong: anchor.songTime)
+    }
+
+    // MARK: What the player hears
+
+    /// Render seconds of what is audible at `host` (falls back to host time before the clock exists).
+    func heardRender(atHost host: Double) -> Double {
+        (audio?.renderSeconds(atHost: host) ?? host) - latency.output
+    }
+
+    func heardSongTime(atHost host: Double) -> Double {
+        clock.songTime(at: heardRender(atHost: host))
+    }
+
+    func countdown(atHost host: Double) -> Int? {
+        clock.countdown(at: heardRender(atHost: host))
+    }
+
+    func phase(atHost host: Double) -> GameClock.Phase {
+        clock.phase(at: heardRender(atHost: host))
+    }
+
+    func isAdvancing(atHost host: Double) -> Bool {
+        clock.isAdvancing(at: heardRender(atHost: host))
+    }
+
+    // MARK: Mic frames
+
+    func observe(_ batch: PitchAnalyzer.Batch, arrival: Double) {
+        if let capture = batch.capture {
+            captureOffset = capture.hostSeconds - capture.streamTime
+        } else if let last = batch.frames.last {
+            fallbackMapper.observe(streamTime: last.time, hostTime: arrival)
+            if captureOffset == nil { captureOffset = fallbackMapper.offset }
+        }
+    }
+
+    /// Song time at which the sound in a frame (stream time) was sung, or nil while time isn't advancing.
+    /// `applyCorrection: false` gives the raw mapping (used by calibration itself).
+    func songTime(forFrameAt streamTime: Double, applyCorrection: Bool = true) -> Double? {
+        guard let captureOffset, let audio else { return nil }
+        let sungHost = streamTime + captureOffset - latency.input
+        guard let render = audio.renderSeconds(atHost: sungHost) else { return nil }
+        let heard = render - latency.output
+        guard clock.isAdvancing(at: heard) else { return nil }
+        return clock.songTime(at: heard) - (applyCorrection ? latency.correction : 0)
+    }
+
+    // MARK: Scheduling audio on the clock
+
+    /// Host time at which song time `songTime` is *rendered* (for scheduling players/clicks), while running.
+    func hostSeconds(forSongTime songTime: Double) -> Double? {
+        guard let anchor = clock.anchor, anchor.time.isFinite else { return nil }
+        return audio?.hostSeconds(forRender: anchor.time + (songTime - anchor.songTime))
+    }
+
+    /// Song time at which rendering (not hearing) currently is.
+    func renderedSongTime() -> Double? {
+        renderNow().map { clock.songTime(at: $0) }
+    }
+}
+#endif

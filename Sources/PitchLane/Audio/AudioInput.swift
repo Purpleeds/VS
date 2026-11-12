@@ -42,6 +42,10 @@ final class AudioInput: ObservableObject {
     @Published private(set) var graphRange: ClosedRange<Double> = 54...66
 
     let diagnostics = AudioDiagnostics()
+    /// Per-route latency calibration (also injected as an environment object).
+    let latencyStore = LatencyStore()
+    /// Output route kind (speaker / wired / Bluetooth / other); latency is calibrated per kind.
+    @Published private(set) var routeKind: AudioRouteKind = .other
 
     private var engine = AVAudioEngine()
     private let analyzer = PitchAnalyzer()
@@ -56,6 +60,12 @@ final class AudioInput: ObservableObject {
     private var frameListeners: [String: (PitchAnalyzer.Batch, Double) -> Void] = [:]
     private var clickPlayer: AVAudioPlayerNode?
     private var clickBuffer: AVAudioPCMBuffer?
+    private var guideVoice: GuideVoice?
+    private var guideNode: AVAudioSourceNode?
+    private var currentGuide: GuideToneRenderer?
+    private var guideVolume: Float = 0
+    private var sessionLatency: (input: Double, output: Double) = (0, 0)
+    let backing = BackingTrack()
 
     init() {
         analyzer.setDelivery { [weak self] batch in
@@ -96,6 +106,87 @@ final class AudioInput: ObservableObject {
 
     func removeFrameListener(_ name: String) {
         frameListeners[name] = nil
+    }
+
+    // MARK: Output clock, guide tone, backing track
+
+    /// Latency for the current route: session input/output latency plus the calibrated correction.
+    var latency: LatencyEstimate {
+        LatencyEstimate(
+            route: routeKind,
+            input: sessionLatency.input,
+            output: sessionLatency.output,
+            correction: latencyStore.profiles[routeKind].correctionMs / 1_000
+        )
+    }
+
+    /// Latest reading of the output sample clock (the master clock), or nil if the engine isn't rendering.
+    func outputAnchor() -> OutputClockAnchor? {
+        guard engine.isRunning else { return nil }
+        return guideVoice?.outputAnchor()
+    }
+
+    func renderSeconds(atHost host: Double) -> Double? {
+        outputAnchor()?.renderSeconds(atHost: host)
+    }
+
+    func hostSeconds(forRender render: Double) -> Double? {
+        outputAnchor()?.hostSeconds(forRender: render)
+    }
+
+    /// Gives the guide synth to the audio thread (nil = silent). Survives engine rebuilds.
+    func installGuide(_ renderer: GuideToneRenderer?) {
+        currentGuide = renderer
+        guideVoice?.install(renderer)
+    }
+
+    func setGuideTimeline(anchorRender: Double, anchorSong: Double) {
+        guideVoice?.setTimeline(anchorRender: anchorRender, anchorSong: anchorSong)
+    }
+
+    func stopGuideTimeline() {
+        guideVoice?.stopTimeline()
+    }
+
+    func setGuideVolume(_ volume: Float) {
+        guideVolume = volume
+        guideVoice?.setVolume(volume)
+    }
+
+    var backingLatency: Double { backing.latency }
+
+    private func attachPlayback() {
+        let outputRate = engine.outputNode.outputFormat(forBus: 0).sampleRate
+        let rate = outputRate > 0 ? outputRate : 48_000
+        if guideNode == nil || guideVoice?.sampleRate != rate {
+            if let old = guideNode { engine.detach(old) }
+            guard let format = AVAudioFormat(standardFormatWithSampleRate: rate, channels: 1) else { return }
+            let voice = GuideVoice(sampleRate: rate)
+            let node = AVAudioSourceNode(format: format, renderBlock: voice.makeRenderBlock())
+            engine.attach(node)
+            engine.connect(node, to: engine.mainMixerNode, format: format)
+            voice.install(currentGuide)
+            voice.setVolume(guideVolume)
+            guideVoice = voice
+            guideNode = node
+            AppLog.info("Guide voice attached at \(Int(rate)) Hz (output clock source)", category: "audio")
+        }
+        backing.attach(to: engine, outputRate: rate)
+    }
+
+    private func updateRoute() {
+        let session = AVAudioSession.sharedInstance()
+        let kind = AudioRouteKind.classify(outputPortTypes: session.currentRoute.outputs.map { $0.portType.rawValue })
+        sessionLatency = (session.inputLatency, session.outputLatency)
+        if kind != routeKind {
+            routeKind = kind
+        }
+        let correction = latencyStore.profiles[kind]
+        AppLog.info(
+            "Route \(kind.rawValue): input latency \(Self.ms(session.inputLatency)) ms, output latency \(Self.ms(session.outputLatency)) ms, "
+                + "calibration \(correction.calibrationMs.map { String(format: "%.0f", $0) } ?? "none") ms, nudge \(String(format: "%.0f", correction.nudgeMs)) ms",
+            category: "latency"
+        )
     }
 
     // MARK: Click track
@@ -249,6 +340,7 @@ final class AudioInput: ObservableObject {
             AppLog.warning("Preferred IO buffer rejected: \(error.localizedDescription)", category: "audio")
         }
         try session.setActive(true)
+        updateRoute()
         AppLog.info(
             "Session active: \(Int(session.sampleRate)) Hz, IO buffer \(Self.ms(session.ioBufferDuration)) ms, "
                 + "input latency \(Self.ms(session.inputLatency)) ms, output latency \(Self.ms(session.outputLatency)) ms, "
@@ -268,9 +360,15 @@ final class AudioInput: ObservableObject {
         input.installTap(onBus: 0, bufferSize: 1_024, format: format, block: analyzer.makeTapBlock())
         tapSampleRate = format.sampleRate
         attachClickPlayer()
+        attachPlayback()
         engine.prepare()
         try engine.start()
         clickPlayer?.play()
+        AppLog.info(
+            "Processing check: session mode \(AVAudioSession.sharedInstance().mode.rawValue), "
+                + "voice processing (echo cancel/AGC) \(input.isVoiceProcessingEnabled ? "ON (unexpected)" : "off")",
+            category: "audio"
+        )
 
         history.removeAll()
         latest = nil
@@ -281,6 +379,7 @@ final class AudioInput: ObservableObject {
     }
 
     private func tearDownEngine() {
+        backing.stop()
         if tapSampleRate > 0 {
             engine.stop()
             engine.inputNode.removeTap(onBus: 0)
@@ -391,6 +490,7 @@ final class AudioInput: ObservableObject {
         let reason = AVAudioSession.RouteChangeReason(rawValue: reasonRaw ?? 0) ?? .unknown
         let route = Self.describe(AVAudioSession.sharedInstance().currentRoute)
         AppLog.info("Route change: \(Self.name(reason)) -> \(route)", category: "audio")
+        updateRoute()
         guard state == .running else { return }
         let rate = engine.inputNode.outputFormat(forBus: 0).sampleRate
         if !engine.isRunning || rate != tapSampleRate {
@@ -414,6 +514,8 @@ final class AudioInput: ObservableObject {
         engine = AVAudioEngine()
         clickPlayer = nil
         clickBuffer = nil
+        guideNode = nil
+        guideVoice = nil
         state = .idle
         diagnostics.setRunning(false)
         if wasActive {

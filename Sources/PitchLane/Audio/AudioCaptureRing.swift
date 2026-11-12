@@ -11,6 +11,8 @@ final class AudioCaptureRing: @unchecked Sendable {
     private let writeTotal = Atomic<Int>(0)
     private let readTotal = Atomic<Int>(0)
     private let dropCount = Atomic<Int>(0)
+    /// (index of the first sample of the latest captured buffer, its capture host time).
+    private let capture = Atomic<WordPair>(WordPair(first: 0, second: 0))
 
     init(capacity: Int) {
         self.capacity = capacity
@@ -40,6 +42,24 @@ final class AudioCaptureRing: @unchecked Sendable {
         writeTotal.store(written + count, ordering: .releasing)
         return true
     }
+
+    /// Producer only: how many samples have been written so far (= index of the next sample).
+    var producerCount: Int { writeTotal.load(ordering: .relaxed) }
+
+    /// Producer only: remember when the buffer starting at sample `index` was captured.
+    func recordCapture(index: Int, hostTime: UInt64) {
+        capture.store(WordPair(first: UInt(index), second: UInt(hostTime)), ordering: .releasing)
+    }
+
+    /// Latest (sample index, capture host time), if any.
+    func latestCapture() -> (index: Int, hostTime: UInt64)? {
+        let pair = capture.load(ordering: .acquiring)
+        guard pair.second != 0 else { return nil }
+        return (Int(pair.first), UInt64(pair.second))
+    }
+
+    /// Consumer only: total samples read so far.
+    var consumerCount: Int { readTotal.load(ordering: .relaxed) }
 
     /// Consumer only. Copies up to `maxCount` samples; returns how many.
     func read(into destination: UnsafeMutablePointer<Float>, maxCount: Int) -> Int {

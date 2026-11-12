@@ -9,11 +9,14 @@ struct GameOptions: Hashable {
     var octaveAgnostic: Bool
     var clickTrack: Bool
     var showNoteNames: Bool
+    var guideTone: Bool
+    var guideVolume: Double
+    var backingVolume: Double
 }
 
-/// Runs one play-through: master clock, scoring, pitch-frame mapping, click scheduling and the state the
-/// lane renderer reads every frame. Published properties change only when a note ends or the phase
-/// changes; per-frame render state is plain stored properties.
+/// Runs one play-through: song clock on the audio output timeline, scoring, guide tone, backing track,
+/// clicks, and the state the lane renderer reads every frame. Published properties change only when a note
+/// ends or the phase changes; per-frame render state is plain stored properties.
 @MainActor
 final class GameSession: ObservableObject {
     enum Phase: Equatable {
@@ -36,9 +39,9 @@ final class GameSession: ObservableObject {
     }
 
     let song: Song
-    let options: GameOptions
     let viewport: LaneViewport
     let noteIndex: NoteIndex
+    private(set) var options: GameOptions
 
     @Published private(set) var phase: Phase = .waitingForAudio
     @Published private(set) var score = 0
@@ -49,9 +52,10 @@ final class GameSession: ObservableObject {
     @Published private(set) var isNewBest = false
     @Published private(set) var previousBest: PersonalBest?
     @Published private(set) var results: [NoteResult] = []
+    @Published private(set) var guideOn: Bool
+    @Published private(set) var hasBacking = false
 
     // Render state (read by the Canvas every frame).
-    private(set) var clock: GameClock
     private(set) var trail: [TrailPoint] = []
     private(set) var latestVoiced: TrailPoint?
     private(set) var latestFrameSongTime = -Double.infinity
@@ -62,7 +66,7 @@ final class GameSession: ObservableObject {
     private(set) var replay = ReplayTrace()
 
     private var keeper: ScoreKeeper
-    private var mapper = StreamClockMapper()
+    private var timebase: SongTimebase?
     private var smoother = ViewportSmoother()
     private var lastRenderHost: Double?
     private var clickHorizon = -Double.infinity
@@ -72,8 +76,9 @@ final class GameSession: ObservableObject {
     private var finishScheduled = false
     private weak var audio: AudioInput?
     private weak var scores: ScoreStore?
+    private var backingURL: URL?
 
-    /// The stabiliser's 5-frame median lags ~20 ms; step 4 replaces this with measured latency.
+    /// The stabiliser's 5-frame median lags ~20 ms behind the sound.
     static let pitchLatency = 0.02
     private static let listenerName = "game"
 
@@ -83,66 +88,107 @@ final class GameSession: ObservableObject {
         self.options = options
         self.viewport = viewport
         noteIndex = NoteIndex(song: song)
-        clock = GameClock(songDuration: song.duration)
         keeper = ScoreKeeper(song: song, rules: ScoringRules(difficulty: options.difficulty, octaveAgnostic: options.octaveAgnostic))
         pitchRange = viewport.range(center: viewport.targetCenter(at: 0))
+        guideOn = options.guideTone
     }
 
     // MARK: Lifecycle
 
-    func begin(audio: AudioInput, scores: ScoreStore) {
+    func begin(audio: AudioInput, scores: ScoreStore, backingURL: URL?) {
         self.audio = audio
         self.scores = scores
         previousBest = scores.best(songID: song.id, difficulty: options.difficulty)
+        timebase = SongTimebase(audio: audio, songDuration: song.duration)
         audio.addFrameListener(Self.listenerName) { [weak self] batch, arrival in
             self?.receive(batch, arrival: arrival)
         }
-        startClock()
+        audio.installGuide(GuideToneRenderer(song: song, envelope: .soft))
+        audio.setGuideVolume(guideOn ? Float(options.guideVolume) : 0)
+        loadBacking(backingURL)
+        let latency = audio.latency
         AppLog.info(
             "Game start: \"\(song.title)\" [\(song.id)] \(options.difficulty.displayName), octave-agnostic \(options.octaveAgnostic), "
-                + "click \(options.clickTrack), \(keeper.scoredNoteCount) scored notes, \(song.summary.durationText), "
-                + "lane \(Int(viewport.fullRange.lowerBound))-\(Int(viewport.fullRange.upperBound))\(viewport.pans ? " (pans)" : "")",
+                + "click \(options.clickTrack), guide \(guideOn ? String(format: "%.0f%%", options.guideVolume * 100) : "off"), "
+                + "backing \(hasBacking ? String(format: "%.0f%%", options.backingVolume * 100) : "none"), "
+                + "\(keeper.scoredNoteCount) scored notes, \(song.summary.durationText), "
+                + "lane \(Int(viewport.fullRange.lowerBound))-\(Int(viewport.fullRange.upperBound))\(viewport.pans ? " (pans)" : ""), "
+                + "route \(latency.route.rawValue) in \(Self.ms(latency.input)) out \(Self.ms(latency.output)) correction \(Self.ms(latency.correction)) ms",
             category: "game"
         )
+        startWhenClockIsReady()
+    }
+
+    private func loadBacking(_ url: URL?) {
+        backingURL = url
+        guard let audio, let url else {
+            hasBacking = false
+            return
+        }
+        do {
+            try audio.backing.load(url: url)
+            audio.backing.setVolume(Float(options.backingVolume))
+            hasBacking = true
+            AppLog.info(
+                "Backing loaded: \(url.lastPathComponent), \(String(format: "%.1f", audio.backing.duration)) s, "
+                    + "offset \(Int(song.offsetMs)) ms, time-pitch latency \(Self.ms(audio.backingLatency)) ms",
+                category: "game"
+            )
+        } catch {
+            hasBacking = false
+            AppLog.error("Backing audio couldn't be opened: \(error.localizedDescription)", category: "game")
+        }
     }
 
     func end() {
         audio?.diagnostics.clearGameFrameStats()
         audio?.removeFrameListener(Self.listenerName)
         audio?.cancelClicks()
+        audio?.backing.unload()
+        timebase?.stop()
+        audio?.installGuide(nil)
         if phase != .finished {
-            AppLog.info("Game quit at \(String(format: "%.1f", clock.songTime(at: CACurrentMediaTime()))) s, score \(score)", category: "game")
+            AppLog.info("Game quit at \(String(format: "%.1f", currentSongTime())) s, score \(score)", category: "game")
         }
         logRenderStats()
     }
 
-    private func startClock() {
-        clock = GameClock(songDuration: song.duration)
-        clock.start(at: CACurrentMediaTime())
-        clickHorizon = -Double.infinity
-        phase = .running
+    /// Starts the countdown as soon as the output clock is ticking.
+    private func startWhenClockIsReady() {
+        guard let timebase else { return }
+        if timebase.start() {
+            clickHorizon = -Double.infinity
+            phase = .running
+            scheduleBacking(fromSong: 0)
+        } else {
+            phase = .waitingForAudio
+        }
     }
 
     func pause(reason: String) {
-        guard phase == .running else { return }
-        let now = CACurrentMediaTime()
-        clock.pause(at: now)
+        guard phase == .running, let timebase else { return }
+        timebase.pause()
         audio?.cancelClicks()
+        audio?.backing.stop()
         clickHorizon = -Double.infinity
         phase = .paused
-        AppLog.info("Game paused (\(reason)) at \(String(format: "%.2f", clock.songTime(at: now))) s", category: "game")
+        AppLog.info("Game paused (\(reason)) at \(String(format: "%.2f", currentSongTime())) s", category: "game")
     }
 
     func resume() {
-        guard phase == .paused else { return }
-        clock.resume(at: CACurrentMediaTime())
+        guard phase == .paused, let timebase else { return }
+        timebase.resume()
         lastRenderHost = nil
         phase = .running
-        AppLog.info("Game resumed", category: "game")
+        if let anchor = timebase.clock.anchor {
+            scheduleBacking(fromSong: anchor.songTime)
+        }
+        AppLog.info("Game resumed at \(String(format: "%.2f", currentSongTime())) s", category: "game")
     }
 
     func restart() {
         audio?.cancelClicks()
+        audio?.backing.stop()
         keeper = ScoreKeeper(song: song, rules: ScoringRules(difficulty: options.difficulty, octaveAgnostic: options.octaveAgnostic))
         score = 0
         combo = 0
@@ -162,21 +208,68 @@ final class GameSession: ObservableObject {
         lastRenderHost = nil
         finishScheduled = false
         previousBest = scores?.best(songID: song.id, difficulty: options.difficulty)
-        startClock()
+        startWhenClockIsReady()
         AppLog.info("Game restarted", category: "game")
+    }
+
+    // MARK: Live audio options
+
+    func setGuide(_ on: Bool) {
+        guideOn = on
+        audio?.setGuideVolume(on ? Float(options.guideVolume) : 0)
+        AppLog.info("Guide tone \(on ? "on" : "off")", category: "game")
+    }
+
+    func setGuideVolume(_ volume: Double) {
+        options.guideVolume = volume
+        if guideOn { audio?.setGuideVolume(Float(volume)) }
+    }
+
+    func setBackingVolume(_ volume: Double) {
+        options.backingVolume = volume
+        audio?.backing.setVolume(Float(volume))
+    }
+
+    // MARK: Backing and clicks on the song clock
+
+    /// Plays the backing so that song time `songTime` is rendered exactly when the clock renders it.
+    private func scheduleBacking(fromSong songTime: Double) {
+        guard hasBacking, let audio, let timebase else { return }
+        let offset = song.offsetMs / 1_000
+        var fileTime = songTime - offset
+        var startSong = songTime
+        if fileTime < 0 {
+            startSong -= fileTime
+            fileTime = 0
+        }
+        guard fileTime < audio.backing.duration, let host = timebase.hostSeconds(forSongTime: startSong) else { return }
+        audio.backing.play(fromFileTime: fileTime, atHost: host - audio.backingLatency)
+        AppLog.debug("Backing scheduled: file \(String(format: "%.2f", fileTime)) s at song \(String(format: "%.2f", startSong)) s", category: "game")
+    }
+
+    private func scheduleClicks(renderedSong t: Double) {
+        guard let timebase else { return }
+        let horizon = t + 0.5
+        let from = max(clickHorizon, t)
+        guard horizon > from else { return }
+        for click in song.clickTimes(from: from, to: horizon) {
+            if let host = timebase.hostSeconds(forSongTime: click) {
+                audio?.scheduleClick(atHostTime: host)
+            }
+        }
+        clickHorizon = horizon
     }
 
     // MARK: Pitch frames
 
     private func receive(_ batch: PitchAnalyzer.Batch, arrival: Double) {
-        guard let last = batch.frames.last else { return }
-        mapper.observe(streamTime: last.time, hostTime: arrival)
-        guard phase == .running, let offset = mapper.offset else { return }
+        guard let timebase else { return }
+        timebase.observe(batch, arrival: arrival)
+        guard phase == .running else { return }
         var changed = false
         for frame in batch.frames {
-            let host = frame.time + offset - Self.pitchLatency
-            guard clock.isAdvancing(at: host) else { continue }
-            let t = clock.songTime(at: host)
+            guard let mapped = timebase.songTime(forFrameAt: frame.time) else { continue }
+            let t = mapped - Self.pitchLatency
             guard t > latestFrameSongTime else { continue }
             latestFrameSongTime = t
 
@@ -243,24 +336,40 @@ final class GameSession: ObservableObject {
 
     // MARK: Per frame (called from the Canvas)
 
-    /// Advances render-side state for the frame at `host`. Never publishes synchronously.
+    func countdown(atHost host: Double) -> Int? {
+        guard phase == .running else { return nil }
+        return timebase?.countdown(atHost: host)
+    }
+
+    private func currentSongTime() -> Double {
+        timebase?.heardSongTime(atHost: CACurrentMediaTime()) ?? 0
+    }
+
+    /// Advances render-side state for the frame at `host` and returns the song time to draw (what the player
+    /// hears now). Never publishes synchronously.
     @discardableResult
     func renderTick(host: Double) -> Double {
         frameMeter.tick(at: host)
         let dt = lastRenderHost.map { host - $0 } ?? 0
         lastRenderHost = host
-        let t = clock.songTime(at: host)
+        if phase == .waitingForAudio, timebase != nil {
+            Task { @MainActor [weak self] in
+                if self?.phase == .waitingForAudio { self?.startWhenClockIsReady() }
+            }
+        }
+        guard let timebase else { return -3 }
+        let t = timebase.heardSongTime(atHost: host)
 
         let target = viewport.targetCenter(at: t)
         let center = smoother.update(target: target, dt: dt)
         pitchRange = viewport.range(center: center)
 
-        if options.clickTrack, phase == .running, clock.isAdvancing(at: host) {
-            scheduleClicks(songTime: t, host: host)
+        if options.clickTrack, phase == .running, let rendered = timebase.renderedSongTime(), timebase.isAdvancing(atHost: host) {
+            scheduleClicks(renderedSong: rendered)
         }
         popups.removeAll { t - $0.songTime > 1.2 }
 
-        if phase == .running, !finishScheduled, clock.phase(at: host) == .finished {
+        if phase == .running, !finishScheduled, timebase.phase(atHost: host) == .finished {
             finishScheduled = true
             Task { @MainActor [weak self] in self?.finish() }
         }
@@ -276,16 +385,6 @@ final class GameSession: ObservableObject {
         return t
     }
 
-    private func scheduleClicks(songTime t: Double, host: Double) {
-        let horizon = t + 0.5
-        let from = max(clickHorizon, t)
-        guard horizon > from else { return }
-        for click in song.clickTimes(from: from, to: horizon) {
-            audio?.scheduleClick(atHostTime: host + (click - t))
-        }
-        clickHorizon = horizon
-    }
-
     // MARK: Finish
 
     private func finish() {
@@ -298,6 +397,8 @@ final class GameSession: ObservableObject {
         result = summary
         phase = .finished
         audio?.cancelClicks()
+        audio?.backing.stop()
+        timebase?.stop()
         let counts = NoteRating.allCases.map { "\($0.rawValue) \(summary.counts[$0, default: 0])" }.joined(separator: ", ")
         AppLog.info(
             "Game finished: score \(summary.score), grade \(summary.grade.rawValue), accuracy \(String(format: "%.1f", summary.accuracy * 100))%, "
@@ -312,6 +413,10 @@ final class GameSession: ObservableObject {
             "Render: \(String(format: "%.0f", frameMeter.framesPerSecond)) fps (last second), worst frame seen \(String(format: "%.1f", worstFrameSeen)) ms",
             category: "game"
         )
+    }
+
+    private static func ms(_ seconds: Double) -> String {
+        String(format: "%.0f", seconds * 1_000)
     }
 }
 

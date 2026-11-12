@@ -8,7 +8,7 @@ struct GameRoute: Hashable {
 }
 
 enum Route: Hashable {
-    case play, library, tuner, settings, logs
+    case play, library, tuner, settings, logs, latency
     case game(GameRoute)
 
     var name: String {
@@ -18,6 +18,7 @@ enum Route: Hashable {
         case .tuner: return "tuner"
         case .settings: return "settings"
         case .logs: return "logs"
+        case .latency: return "latency"
         case .game(let route): return "game(\(route.songID), \(route.difficulty.rawValue))"
         }
     }
@@ -70,6 +71,7 @@ struct HomeView: View {
                 case .play: LibraryView(title: "Choose a Song", onPlay: play)
                 case .library: LibraryView(title: "Library", onPlay: play)
                 case .game(let route): GameScreen(route: route)
+                case .latency: CalibrationView()
                 case .tuner: TunerView()
                 case .settings: SettingsView()
                 case .logs: LogsView()

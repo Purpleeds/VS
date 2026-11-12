@@ -15,9 +15,17 @@ final class PitchAnalyzer: @unchecked Sendable {
         var inputSampleRate: Double
     }
 
+    /// Exact capture time of one point of the analysis stream: stream time (seconds since this pipeline started)
+    /// <-> host seconds when that sample was captured.
+    struct CaptureAnchor: Sendable, Equatable {
+        var streamTime: Double
+        var hostSeconds: Double
+    }
+
     struct Batch: Sendable {
         var frames: [PitchFrame]
         var stats: Stats?
+        var capture: CaptureAnchor?
     }
 
     private let queue = DispatchQueue(label: "PitchLane.pitch-analysis", qos: .userInteractive)
@@ -34,6 +42,8 @@ final class PitchAnalyzer: @unchecked Sendable {
     private var framesInWindow = 0
     private var logTiming = AnalysisTiming()
     private var droppedAtLastLog = 0
+    private var streamBase = 0
+    private var inputRate = 48_000.0
 
     init() {
         wake = DispatchSource.makeUserDataAddSource(queue: queue)
@@ -52,16 +62,19 @@ final class PitchAnalyzer: @unchecked Sendable {
     /// The tap block. Runs on the audio thread: copies channel 0 into the ring and wakes the queue.
     /// No allocation, locks or logging in here.
     func makeTapBlock() -> AVAudioNodeTapBlock {
-        { @Sendable [self] buffer, _ in
-            self.ingest(buffer)
+        { @Sendable [self] buffer, when in
+            self.ingest(buffer, when: when)
         }
     }
 
-    private func ingest(_ buffer: AVAudioPCMBuffer) {
+    private func ingest(_ buffer: AVAudioPCMBuffer, when: AVAudioTime) {
         guard let channels = buffer.floatChannelData else { return }
         let count = Int(buffer.frameLength)
         guard count > 0 else { return }
-        ring.write(channels[0], count: count)
+        let index = ring.producerCount
+        if ring.write(channels[0], count: count), when.isHostTimeValid {
+            ring.recordCapture(index: index, hostTime: when.hostTime)
+        }
         wake.add(data: 1)
     }
 
@@ -70,6 +83,8 @@ final class PitchAnalyzer: @unchecked Sendable {
         queue.async { [self] in
             flushStats()
             ring.discardAll()
+            streamBase = ring.consumerCount
+            inputRate = sampleRate
             let configuration = PitchPipelineConfiguration(accidentals: accidentals)
             let pipeline = PitchPipeline(inputSampleRate: sampleRate, configuration: configuration)
             self.pipeline = pipeline
@@ -145,8 +160,15 @@ final class PitchAnalyzer: @unchecked Sendable {
         }
 
         for event in events { log(event) }
+        var capture: CaptureAnchor?
+        if let latest = ring.latestCapture(), latest.index >= streamBase {
+            capture = CaptureAnchor(
+                streamTime: Double(latest.index - streamBase) / inputRate,
+                hostSeconds: AVAudioTime.seconds(forHostTime: latest.hostTime)
+            )
+        }
         if let deliver, !frames.isEmpty || stats != nil {
-            deliver(Batch(frames: frames, stats: stats))
+            deliver(Batch(frames: frames, stats: stats, capture: capture))
         }
     }
 

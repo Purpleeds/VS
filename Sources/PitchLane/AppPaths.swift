@@ -17,5 +17,6 @@ enum AppPaths {
     static var settingsFile: URL { supportDirectory.appendingPathComponent("settings.json") }
     static var songsDirectory: URL { supportDirectory.appendingPathComponent("Songs", isDirectory: true) }
     static var personalBestsFile: URL { supportDirectory.appendingPathComponent("personal-bests.json") }
+    static var latencyFile: URL { supportDirectory.appendingPathComponent("latency.json") }
 }
 #endif

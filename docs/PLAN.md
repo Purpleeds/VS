@@ -135,16 +135,33 @@ Play a built-in on each difficulty; notes scroll smoothly at 120 fps (debug over
 when silent; slides/golden/lyrics look right; a wide MIDI import pans smoothly; pause/resume/restart/quit; results +
 personal best persist; click track in time.
 
-## 4. Guide tone + backing track + latency
+## 4. Guide tone + backing track + latency (done)
 
-Goal: audio playback that lines up with what the player sees and sings.
+### Design
+- **Shared engine.** Mic tap, click player, guide `AVAudioSourceNode`, backing player -> `AVAudioUnitTimePitch`
+  -> main mixer, all in `AudioInput`'s single `AVAudioEngine`. `.measurement` mode keeps AGC/echo processing off;
+  the engine logs `isVoiceProcessingEnabled` at every start.
+- **Master clock.** The guide source node renders on every output cycle and publishes (sample time, host time)
+  atomically. `SongTimebase` runs the game clock in output-render seconds; the lane draws the song time being
+  *heard* (render time - output latency). The guide renders from the same anchor on the render thread; the
+  backing (via time-pitch, latency compensated) and clicks are scheduled at the host time of their render time,
+  so audio and visuals share one clock and cannot drift.
+- **Mic timing.** The input tap's `AVAudioTime` gives the capture host time of each buffer; frames map to
+  `songTime(render(capture - input latency) - output latency) - per-route correction - 20 ms median lag`.
+- **Guide tone.** Core `GuideToneRenderer`: fundamental + soft 2nd/3rd harmonics, raised-cosine 30 ms attack /
+  60 ms release, legato across gaps < 40 ms, glides on slides, 3 ms gain smoothing (no clicks on pause/volume).
+  Off by default on Hard; toggle + volume in the song sheet, Settings and the pause menu.
+- **Backing track.** Attached audio plays with `Song.offsetMs` (notes later = positive) through time-pitch at rate 1.
+- **Latency.** Starts from `AVAudioSession` input/output latency. Settings > Latency: 4 count-in + 8 beeps;
+  clap or sing "ta" on each (or stay silent on the speaker: the mic hears the beeps). Core `LatencyCalibrator`
+  finds each onset (rising crossing of local floor + 12 dB), median offset + spread; save per route
+  (speaker / wired / Bluetooth / other) and nudge in 5 ms steps.
+- **Warnings.** Speaker: headphones work best (leak into the mic can score as your voice). Bluetooth: delay,
+  calibrate.
 
-- Guide tone synthesiser (sine/soft vowel-ish) for the current note, toggle + volume.
-- Backing-track playback (`AVAudioPlayerNode`/`AVAudioEngine`) synced to song time.
-- Latency: measure/estimate input + output latency from the session, manual calibration offset (tap/clap or
-  slider), applied to scoring and visuals; headphone guidance (avoid speaker bleed into the mic).
-- Phone checklist: guide tone matches notes, backing stays in sync over a full song, calibration changes the
-  alignment, bluetooth route is handled and logged.
+### Phone checklist
+Speaker, wired headphones, Bluetooth earbuds: calibrate each, play a song with guide tone (and one with backing
+audio), check notes, guide and backing stay together over a whole song, pause/resume re-syncs, route warnings.
 
 ## 5. Range test + practice + settings
 

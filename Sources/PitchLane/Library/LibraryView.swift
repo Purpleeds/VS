@@ -285,6 +285,10 @@ struct SongDetailSheet: View {
             }
             if onPlay != nil {
                 Section("Game options") {
+                    Toggle("Guide tone (\(difficulty == .hard ? "Hard" : "Easy & Normal"))", isOn: Binding(
+                        get: { settings.settings.guideEnabled(for: difficulty) },
+                        set: { settings.settings.setGuide($0, for: difficulty) }
+                    ))
                     Toggle("Any octave counts", isOn: $settings.settings.octaveAgnostic)
                     Toggle("Click track", isOn: $settings.settings.clickTrack)
                     Toggle("Note names on notes", isOn: $settings.settings.showNoteNames)

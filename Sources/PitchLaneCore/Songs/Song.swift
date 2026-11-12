@@ -233,6 +233,22 @@ public struct SongSummary: Sendable, Equatable {
     public var duration: Double
     public var hasBackingAudio: Bool
 
+    public init(
+        noteCount: Int,
+        scoredNoteCount: Int,
+        goldenCount: Int,
+        pitchRange: ClosedRange<Int>?,
+        duration: Double,
+        hasBackingAudio: Bool
+    ) {
+        self.noteCount = noteCount
+        self.scoredNoteCount = scoredNoteCount
+        self.goldenCount = goldenCount
+        self.pitchRange = pitchRange
+        self.duration = duration
+        self.hasBackingAudio = hasBackingAudio
+    }
+
     /// e.g. "C3–G4".
     public func rangeText(accidentals: Accidentals) -> String {
         guard let range = pitchRange else { return "–" }

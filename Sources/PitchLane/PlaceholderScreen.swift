@@ -35,10 +35,4 @@ struct PlayView: View {
     }
 }
 
-struct LibraryView: View {
-    var body: some View {
-        PlaceholderScreen(title: "Library", symbol: "books.vertical", note: "Songs will live here.")
-    }
-}
-
 #endif

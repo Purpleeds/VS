@@ -61,7 +61,7 @@ struct HomeView: View {
             .navigationDestination(for: Route.self) { route in
                 switch route {
                 case .play: PlayView()
-                case .library: LibraryView()
+                case .library: LibraryView(title: "Library")
                 case .tuner: TunerView()
                 case .settings: SettingsView()
                 case .logs: LogsView()

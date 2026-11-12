@@ -100,8 +100,15 @@ final class UltraStarImporterTests: XCTestCase {
     }
 
     func testLatin1AndWindows1252() throws {
-        var bytes = Array("#TITLE:Caf".utf8) + [0xE9] + Array("\n#ARTIST:".utf8) + [0x93] + Array("Q".utf8) + [0x94]
-        bytes += Array("\n#BPM:120\n: 0 1 0 ".utf8) + [0xFC] + Array("ber\nE\n".utf8)
+        var bytes: [UInt8] = Array("#TITLE:Caf".utf8)
+        bytes.append(0xE9)
+        bytes.append(contentsOf: "\n#ARTIST:".utf8)
+        bytes.append(0x93)
+        bytes.append(contentsOf: "Q".utf8)
+        bytes.append(0x94)
+        bytes.append(contentsOf: "\n#BPM:120\n: 0 1 0 ".utf8)
+        bytes.append(0xFC)
+        bytes.append(contentsOf: "ber\nE\n".utf8)
         let song = try UltraStarImporter.parse(data: Data(bytes), id: "x").song
         XCTAssertEqual(song.title, "Café")
         XCTAssertEqual(song.artist, "\u{201C}Q\u{201D}")

@@ -6,11 +6,13 @@ struct PitchLaneApp: App {
     @UIApplicationDelegateAdaptor(AppDelegate.self) private var appDelegate
     @StateObject private var settings: SettingsModel
     @StateObject private var audio: AudioInput
+    @StateObject private var library: LibraryModel
 
     init() {
         AppLog.bootstrap()
         _settings = StateObject(wrappedValue: SettingsModel())
         _audio = StateObject(wrappedValue: AudioInput())
+        _library = StateObject(wrappedValue: LibraryModel())
     }
 
     var body: some Scene {
@@ -19,6 +21,7 @@ struct PitchLaneApp: App {
                 .environmentObject(settings)
                 .environmentObject(audio)
                 .environmentObject(audio.diagnostics)
+                .environmentObject(library)
                 .preferredColorScheme(.dark)
         }
     }

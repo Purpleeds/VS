@@ -19,6 +19,8 @@ final class SongTimebase {
     private let leadIn: Double
     private var captureOffset: Double?
     private var fallbackMapper = StreamClockMapper()
+    /// Last output-render time seen, used when the engine has just stopped (route change, interruption).
+    private var lastRender: Double?
 
     init(audio: AudioInput, songDuration: Double, leadIn: Double = 3) {
         self.audio = audio
@@ -31,7 +33,9 @@ final class SongTimebase {
 
     /// Output render seconds now, if the output clock is running.
     func renderNow() -> Double? {
-        audio?.renderSeconds(atHost: CACurrentMediaTime())
+        let render = audio?.renderSeconds(atHost: CACurrentMediaTime())
+        if let render { lastRender = render }
+        return render
     }
 
     /// Starts the countdown. Returns false until the output clock is available.
@@ -47,7 +51,7 @@ final class SongTimebase {
 
     /// Freezes at what the player is hearing now.
     func pause() {
-        guard let render = renderNow() else { return }
+        guard let render = renderNow() ?? lastRender else { return }
         clock.pause(at: render - latency.output)
         publish()
     }
@@ -74,7 +78,11 @@ final class SongTimebase {
 
     /// Render seconds of what is audible at `host` (falls back to host time before the clock exists).
     func heardRender(atHost host: Double) -> Double {
-        (audio?.renderSeconds(atHost: host) ?? host) - latency.output
+        if let render = audio?.renderSeconds(atHost: host) {
+            lastRender = render
+            return render - latency.output
+        }
+        return (lastRender ?? host) - latency.output
     }
 
     func heardSongTime(atHost host: Double) -> Double {

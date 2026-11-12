@@ -22,6 +22,9 @@ final class GuideVoice: @unchecked Sendable {
     // Written by the main thread only while inactive; read by the audio thread only while active.
     private var slotA: GuideToneRenderer?
     private var slotB: GuideToneRenderer?
+    /// Main-thread bookkeeping: the slot written by the last install. The next install writes the other one,
+    /// so a slot the render thread may still be reading is never overwritten right after an uninstall.
+    private var lastWrittenSlot = 1
 
     init(sampleRate: Double) {
         self.sampleRate = sampleRate
@@ -35,8 +38,9 @@ final class GuideVoice: @unchecked Sendable {
             activeSlot.store(-1, ordering: .releasing)
             return
         }
-        let target = activeSlot.load(ordering: .acquiring) == 0 ? 1 : 0
+        let target = lastWrittenSlot == 0 ? 1 : 0
         if target == 0 { slotA = renderer } else { slotB = renderer }
+        lastWrittenSlot = target
         activeSlot.store(target, ordering: .releasing)
     }
 

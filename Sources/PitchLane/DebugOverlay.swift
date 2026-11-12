@@ -7,7 +7,7 @@ struct DebugOverlay: ViewModifier {
     let enabled: Bool
 
     func body(content: Content) -> some View {
-        content.overlay(alignment: .topLeading) {
+        content.overlay(alignment: .bottomLeading) {
             if enabled {
                 DebugOverlayPanel()
                     .allowsHitTesting(false)

@@ -51,6 +51,32 @@ xtool dev build --ipa -c release            # what build-ipa.sh runs
   `NSMicrophoneUsageDescription` = "PitchLane listens to your voice to show your pitch. Audio never leaves your phone."
   and `CADisableMinimumFrameDurationOnPhone` = true (120 Hz).
 
+## CI (GitHub Actions, `.github/workflows/ci.yml`)
+
+Runs on every push and PR:
+- **Core tests (Linux):** `swift test` in debug and release inside `swift:6.2-noble`, warnings are errors.
+- **iOS compile check (macOS runner):** SwiftPM build for `arm64-apple-ios26.0` (what xtool does) plus an unsigned
+  generic-device `xcodebuild`; any Swift warning fails the job. This runner is the only place Xcode tools are used;
+  it is a compile check, not part of the user's workflow.
+- CI cannot produce the installable IPA (xtool needs the Darwin SDK and an Apple ID). The IPA is always built
+  locally in WSL with `scripts/build-ipa.sh`.
+- In a cloud session without a Swift toolchain, push and read the CI logs instead of guessing whether code compiles.
+
+## Audio and pitch (step 1)
+
+- `AudioInput` (app, `@MainActor`) is the single app-wide mic owner. Screens call `acquire("name")` /
+  `release("name")`; the engine runs while any screen holds it and the app is in the foreground.
+  Session: `.playAndRecord`, mode `.measurement` (no AGC), preferred 48 kHz / 5 ms I/O.
+- Tap block (audio thread): copy channel 0 into `AudioCaptureRing` (lock-free SPSC) and poke a dispatch source.
+  Nothing else: no allocation, locks, logging, Swift arrays or main-actor hops there.
+- `PitchAnalyzer` drains the ring on its own serial queue into Core's `PitchPipeline`
+  (resample to 16 kHz, YIN, stabiliser, 100 frames/s) and delivers batches to the main actor in order.
+- Interruptions, route changes, engine configuration changes and media-services resets restart the engine
+  and are logged. Mic permission denied shows an explanation + Settings link.
+- Pitch defaults (Core): C2-C6, YIN threshold 0.15, gate -50 dBFS, confidence >= 0.85, 5-frame median,
+  octave guard (>= 9 semitones needs 3 agreeing frames). When unsure, frames are unvoiced.
+- Note names always carry their own accidental (F♯4, B♭3); sharps/flats is a setting.
+
 ## Versioning
 
 - `CFBundleShortVersionString` = marketing version; `CFBundleVersion` = integer build number.

@@ -77,6 +77,18 @@ Runs on every push and PR:
   octave guard (>= 9 semitones needs 3 agreeing frames). When unsure, frames are unvoiced.
 - Note names always carry their own accidental (F♯4, B♭3); sharps/flats is a setting.
 
+## Songs and library (step 2)
+
+- `Song` (Core) is the one song model: notes in seconds from the song/backing-audio start, MIDI pitch, syllable,
+  golden, freestyle (unscored), `slidesFromPrevious` + `slideDuration` (nil = whole-note glide, e.g. sirens;
+  UltraStar `~` = short glide), line breaks, tempo segments (click grid), backing audio file, `offsetMs`.
+  Decoding is forgiving (new fields need defaults). `song.json` per imported song.
+- Importers live in Core and must never trap on bad input: throw `SongImportError` with a line (text) or byte
+  offset (binary). Every importer gets malformed-file tests (including random bytes).
+- Imported songs: `Application Support/PitchLane/Songs/<uuid>/` with `song.json`, `original.<ext>`, `backing.<ext>`.
+  Built-ins are generated in code (`BuiltInSongs`), never stored, and must stay original (no copyrighted songs or
+  lyrics).
+
 ## Versioning
 
 - `CFBundleShortVersionString` = marketing version; `CFBundleVersion` = integer build number.

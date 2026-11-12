@@ -69,26 +69,71 @@ Measured and compensated in step 4.
 - Phone checklist: sing a slow scale, hold a note with vibrato, whistle, stay silent near a fan or TV,
   then paste the Logs.
 
-## 2. Song format + importers
+## 2. Song format + importers (done)
 
-Goal: songs as Codable JSON in Application Support, plus ways to get them in.
-
-- Core: `Song` model (title, artist, tempo map, notes with start/duration/MIDI pitch, optional lyrics,
-  backing-track reference, schema version), validation, JSON round-trip, transposition helper.
-- Importers (Core, pure parsers, fixture tests): MIDI (.mid), UltraStar (.txt), MusicXML; clear error reporting.
-- App: Library screen lists songs, import via the Files picker, delete, bundled demo song.
-- Phone checklist: import each format, malformed file shows a readable error, library survives relaunch.
+- Core `Song` / `SongNote` (start s, duration s, MIDI pitch, syllable, golden, freestyle, slide + glide length),
+  line breaks, tempo segments (click grid), optional backing audio file, offset ms. Forgiving JSON decoding.
+- `UltraStarImporter`: #TITLE #ARTIST #MP3/#AUDIO #BPM (comma decimals) #GAP (ms) #RELATIVE; `:` `*` `F` `R` `G`
+  `-` `E`, duets (player 1); beat = 60 / (BPM x 4) s; pitch 0 = C4; `~` = continuation slide; UTF-8 / UTF-16 BOM /
+  Windows-1252 (Latin-1); CRLF. Errors carry the line number.
+- `MIDIFile` (SMF type 0/1): running status, sysex/meta, tempo map, SMPTE division, track list with note counts,
+  channels, range, lyrics, drums flag, suggested melody; chord collapse (same start -> highest) + skyline overlaps.
+  Errors carry the byte offset.
+- `BuiltInSongs`: scales, arpeggios, intervals, long-note holds, sirens and three original melodies
+  ("Morning Lane", "Paper Boats", "Lantern Steps"), each Easy / Normal / Hard.
+- `SongLibraryStore`: one folder per imported song (song.json + original + backing.<ext>).
+- App: Library (search, swipe delete, detail sheet with range/length/notes), Files import incl. backing audio,
+  MIDI melody-track picker.
 
 ## 3. Note lane + scoring
 
-Goal: the actual game screen (landscape).
+Goal: the game screen (landscape), Trombone Champ style, scored fairly at 120 fps.
 
-- Core: scoring engine (per-frame cents error vs. target note, tolerance window, hold/streak/combo, octave
-  forgiveness option, final grade), deterministic and fully tested; song-time <-> beat mapping.
-- App: 120 Hz Canvas/TimelineView lane, notes scrolling right-to-left, pitch cursor driven by the engine,
-  score/combo HUD, pause/resume, results screen.
-- Phone checklist: cursor tracks voice smoothly at 120 Hz, notes line up with the playhead, scoring feels
-  fair, pause/resume and backgrounding behave.
+### Design
+
+**One master clock.** `GameClock` (Core) maps host time (`CACurrentMediaTime`) to song time:
+start -> song time runs from -3 s (countdown, notes already scrolling in); pause freezes it; resume holds it for a
+3-2-1 countdown, then continues. Every frame reads `songTime(at: now)`; nothing counts frames.
+
+**Pitch frames onto the song clock.** Pitch frames carry stream time (samples since capture start).
+`StreamClockMapper` keeps `offset = min(arrival host time - stream time)` (the least-delayed delivery), creeping up
+slowly so it adapts, and resets when the stream restarts. Frame song time = clock(stream time + offset) minus a
+fixed 20 ms for the stabiliser's median lag (step 4 adds measured latency calibration).
+
+**Scoring (`ScoreKeeper`, Core, unit-tested).** For every frame inside a scored note (after a short attack grace of
+min(60 ms, 20% of the note)): error = sung - target in cents, target following slides. Octave-agnostic (default ON)
+folds the error into +/-600 c. On pitch when |error| <= tolerance (Easy 100, Normal 50, Hard 25 c). Unvoiced frames
+count as off pitch. At the note's end: fraction on pitch -> Perfect >= 90%, Great >= 75%, Good >= 50%, Meh >= 25%,
+else Miss. Points = rating base (100/80/50/20/0) x length factor (duration / 0.5 s, clamped 0.5...4) x 2 for golden x
+multiplier. Perfect/Great/Good extend the combo, Meh/Miss reset it; multiplier = 1 + combo / 10, max 4.
+Accuracy = weighted mean of note fractions; grade S >= 95%, A >= 85%, B >= 70%, C >= 55%, D >= 40%, else F.
+`PersonalBests` (JSON) keeps the best score per song + difficulty.
+
+**Lane geometry (`LaneViewport`, Core).** Vertical range = song range +/- 3 semitones, at least 12. Songs wider than
+~2 octaves (26 semitones with margin) get a 26-semitone window that pans: its target centre is the middle of the notes
+within [-1 s, +4 s] of the playhead, smoothed exponentially (time constant 0.6 s) so it glides, never jumps.
+`NoteIndex` finds visible notes by binary search.
+
+**Rendering (app).** `TimelineView(.animation)` + one `Canvas`: semitone lines (labelled C lines), playhead at 20%
+of the width, ~4.5 s of notes to the right. Notes are round-capped strokes from `x(start)` to `x(end)`; slides are
+curves from the previous pitch; golden notes gold with a glow; freestyle dashed; past notes tinted by rating;
+lyrics under notes; optional note names (accidental on each note). Sung pitch: glowing dot on the playhead plus a
+fading 0.4 s trail, hidden when unvoiced, folded to the octave of the nearby notes when octave-agnostic. Rating
+pop-ups float above finished notes. HUD (score, combo, multiplier) is SwiftUI and only changes when a note ends.
+Game fps measured by `FrameRateMeter` and shown in the debug overlay.
+
+**Flow.** Library -> detail sheet -> Sing (difficulty, octave-agnostic, click track, note names) -> landscape game:
+countdown, pause (button or app backgrounding / audio interruption), resume with countdown, restart, quit ->
+results: score, grade, accuracy, longest combo, rating counts, replay graph of the sung pitch over the notes,
+personal best.
+
+**Click track.** Toggle; clicks scheduled ~0.5 s ahead on an `AVAudioPlayerNode` at exact host times from the song's
+tempo grid (2.5 kHz blip, above the pitch range so the mic doesn't score it). Headphones recommended.
+
+### Phone checklist
+Play a built-in on each difficulty; notes scroll smoothly at 120 fps (debug overlay); dot tracks your voice and hides
+when silent; slides/golden/lyrics look right; a wide MIDI import pans smoothly; pause/resume/restart/quit; results +
+personal best persist; click track in time.
 
 ## 4. Guide tone + backing track + latency
 

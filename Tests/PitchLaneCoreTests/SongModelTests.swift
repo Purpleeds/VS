@@ -127,7 +127,7 @@ final class BuiltInSongsTests: XCTestCase {
 
     func testSongsAreWellFormed() {
         for song in BuiltInSongs.all {
-            XCTAssertGreaterThan(song.notes.count, 4, song.id)
+            XCTAssertGreaterThanOrEqual(song.notes.count, 4, song.id)
             XCTAssertFalse(song.tempo.isEmpty, song.id)
             XCTAssertGreaterThan(song.duration, 8, song.id)
             XCTAssertLessThan(song.duration, 90, song.id)

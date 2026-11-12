@@ -14,6 +14,13 @@ public struct AppSettings: Codable, Equatable, Sendable {
     public var clickTrack: Bool
     /// Note names (with accidentals) on the lane's note bars.
     public var showNoteNames: Bool
+    /// Guide tone volume 0...1.
+    public var guideVolume: Double
+    /// Backing track volume 0...1.
+    public var backingVolume: Double
+    /// Guide tone on for Easy/Normal (default on) and Hard (default off).
+    public var guideOnEasyNormal: Bool
+    public var guideOnHard: Bool
 
     public init(
         debugOverlay: Bool = false,
@@ -21,7 +28,11 @@ public struct AppSettings: Codable, Equatable, Sendable {
         lastDifficulty: Difficulty = .normal,
         octaveAgnostic: Bool = true,
         clickTrack: Bool = false,
-        showNoteNames: Bool = false
+        showNoteNames: Bool = false,
+        guideVolume: Double = 0.6,
+        backingVolume: Double = 0.8,
+        guideOnEasyNormal: Bool = true,
+        guideOnHard: Bool = false
     ) {
         self.debugOverlay = debugOverlay
         self.accidentals = accidentals
@@ -29,6 +40,18 @@ public struct AppSettings: Codable, Equatable, Sendable {
         self.octaveAgnostic = octaveAgnostic
         self.clickTrack = clickTrack
         self.showNoteNames = showNoteNames
+        self.guideVolume = guideVolume
+        self.backingVolume = backingVolume
+        self.guideOnEasyNormal = guideOnEasyNormal
+        self.guideOnHard = guideOnHard
+    }
+
+    public func guideEnabled(for difficulty: Difficulty) -> Bool {
+        difficulty == .hard ? guideOnHard : guideOnEasyNormal
+    }
+
+    public mutating func setGuide(_ enabled: Bool, for difficulty: Difficulty) {
+        if difficulty == .hard { guideOnHard = enabled } else { guideOnEasyNormal = enabled }
     }
 
     private enum CodingKeys: String, CodingKey {
@@ -38,6 +61,10 @@ public struct AppSettings: Codable, Equatable, Sendable {
         case octaveAgnostic
         case clickTrack
         case showNoteNames
+        case guideVolume
+        case backingVolume
+        case guideOnEasyNormal
+        case guideOnHard
     }
 
     public init(from decoder: Decoder) throws {
@@ -48,5 +75,9 @@ public struct AppSettings: Codable, Equatable, Sendable {
         self.octaveAgnostic = try container.decodeIfPresent(Bool.self, forKey: .octaveAgnostic) ?? true
         self.clickTrack = try container.decodeIfPresent(Bool.self, forKey: .clickTrack) ?? false
         self.showNoteNames = try container.decodeIfPresent(Bool.self, forKey: .showNoteNames) ?? false
+        self.guideVolume = min(1, max(0, try container.decodeIfPresent(Double.self, forKey: .guideVolume) ?? 0.6))
+        self.backingVolume = min(1, max(0, try container.decodeIfPresent(Double.self, forKey: .backingVolume) ?? 0.8))
+        self.guideOnEasyNormal = try container.decodeIfPresent(Bool.self, forKey: .guideOnEasyNormal) ?? true
+        self.guideOnHard = try container.decodeIfPresent(Bool.self, forKey: .guideOnHard) ?? false
     }
 }

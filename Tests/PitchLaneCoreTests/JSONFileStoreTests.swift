@@ -42,6 +42,21 @@ final class JSONFileStoreTests: XCTestCase {
         XCTAssertTrue(settings.octaveAgnostic, "octave-agnostic scoring defaults to on")
         XCTAssertFalse(settings.clickTrack)
         XCTAssertFalse(settings.showNoteNames)
+        XCTAssertEqual(settings.guideVolume, 0.6)
+        XCTAssertEqual(settings.backingVolume, 0.8)
+        XCTAssertTrue(settings.guideEnabled(for: .easy))
+        XCTAssertTrue(settings.guideEnabled(for: .normal))
+        XCTAssertFalse(settings.guideEnabled(for: .hard), "guide tone is off by default on Hard")
+    }
+
+    func testGuideSettingPerDifficulty() {
+        var settings = AppSettings()
+        settings.setGuide(true, for: .hard)
+        XCTAssertTrue(settings.guideEnabled(for: .hard))
+        settings.setGuide(false, for: .easy)
+        XCTAssertFalse(settings.guideEnabled(for: .normal))
+        let clamped = try? JSONDecoder().decode(AppSettings.self, from: Data(#"{"guideVolume":7}"#.utf8))
+        XCTAssertEqual(clamped?.guideVolume, 1)
     }
 
     func testSettingsAccidentalsRoundTripAndUnknownValueFallsBack() throws {

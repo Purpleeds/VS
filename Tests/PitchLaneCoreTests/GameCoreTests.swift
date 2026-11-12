@@ -49,6 +49,22 @@ final class GameClockTests: XCTestCase {
         XCTAssertTrue(clock.isAdvancing(at: 15.1))
     }
 
+    func testAnchorForTheAudioThread() throws {
+        var clock = GameClock(songDuration: 5)
+        XCTAssertNil(clock.anchor)
+        clock.start(at: 10)
+        var anchor = try XCTUnwrap(clock.anchor)
+        XCTAssertEqual(anchor.time, 10)
+        XCTAssertEqual(anchor.songTime, -3)
+        clock.pause(at: 12)
+        anchor = try XCTUnwrap(clock.anchor)
+        XCTAssertEqual(anchor.time, .infinity, "paused: song time never advances")
+        XCTAssertEqual(anchor.songTime, -1, accuracy: 1e-12)
+        clock.resume(at: 20)
+        anchor = try XCTUnwrap(clock.anchor)
+        XCTAssertEqual(anchor.time, 23)
+    }
+
     func testResumeWithoutPauseIsIgnored() {
         var clock = GameClock(songDuration: 5)
         clock.start(at: 0)

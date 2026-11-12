@@ -30,6 +30,13 @@ public struct GameClock: Sendable, Equatable {
 
     public var isStarted: Bool { anchorHost != nil }
 
+    /// Time base value from which song time runs (`+infinity` while paused), and the song time it starts from.
+    /// Used to hand the timeline to the audio render thread.
+    public var anchor: (time: Double, songTime: Double)? {
+        guard let anchorHost else { return nil }
+        return (isPaused ? .infinity : anchorHost, anchorSong)
+    }
+
     public mutating func start(at host: Double) {
         anchorHost = host
         anchorSong = -leadIn

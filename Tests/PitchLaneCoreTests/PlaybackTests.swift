@@ -172,7 +172,7 @@ final class LatencyTests: XCTestCase {
         for i in 0..<700 {
             let t = Double(i) * 0.01
             var db = -72 + 4 * (random.uniform() - 0.5)
-            for beep in beeps where t >= beep + 0.04 && t < beep + 0.12 { db = -20 }
+            for beep in beeps where t >= beep + 0.035 && t < beep + 0.115 { db = -20 }
             levels.append(.init(time: t, dBFS: db))
         }
         let result = try XCTUnwrap(LatencyCalibrator.estimate(beeps: beeps, levels: levels, onsetBias: 0))

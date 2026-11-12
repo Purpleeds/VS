@@ -1,5 +1,5 @@
 import XCTest
-@testable import PitchLaneCore
+import PitchLaneCore
 
 final class JSONFileStoreTests: XCTestCase {
     private var directory: URL!

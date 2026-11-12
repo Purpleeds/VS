@@ -1,0 +1,71 @@
+name: CI
+
+# Verification only. The installable IPA is still built locally in WSL with
+# scripts/build-ipa.sh (xtool needs the Darwin SDK, which can't be fetched in CI).
+on:
+  push:
+  pull_request:
+  workflow_dispatch:
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  core-tests:
+    name: Core tests (Linux)
+    runs-on: ubuntu-24.04
+    container: swift:6.2-noble
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v4
+      - name: Swift version
+        run: swift --version
+      - name: Test (debug, warnings are errors)
+        run: swift test -Xswiftc -warnings-as-errors
+      - name: Test (release, warnings are errors)
+        run: swift test -c release -Xswiftc -warnings-as-errors
+
+  ios-build:
+    name: iOS compile check (release)
+    runs-on: macos-26
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+      - name: Select newest Xcode 26+
+        run: |
+          XCODE=$(ls -d /Applications/Xcode_2[6-9]*.app 2>/dev/null | tail -1 || true)
+          if [ -n "$XCODE" ]; then sudo xcode-select -s "$XCODE"; fi
+          xcodebuild -version
+          echo "iOS SDK: $(xcrun --sdk iphoneos --show-sdk-version)"
+      - name: SwiftPM build for iOS (mirrors xtool)
+        run: |
+          set -o pipefail
+          swift build -c release \
+            --triple arm64-apple-ios26.0 \
+            --sdk "$(xcrun --sdk iphoneos --show-sdk-path)" \
+            -Xswiftc -warnings-as-errors 2>&1 | tee swiftpm-ios.log
+      - name: xcodebuild for iOS (generic device, unsigned)
+        run: |
+          set -o pipefail
+          xcodebuild build \
+            -scheme PitchLane \
+            -destination 'generic/platform=iOS' \
+            -configuration Release \
+            -derivedDataPath .build/xcode \
+            CODE_SIGNING_ALLOWED=NO \
+            SWIFT_TREAT_WARNINGS_AS_ERRORS=YES 2>&1 | tee xcodebuild.log
+      - name: Fail on any Swift warning
+        run: |
+          if grep -hE '\.swift:[0-9]+:[0-9]+: warning:' swiftpm-ios.log xcodebuild.log; then
+            echo "::error::Swift warnings found (see above)"; exit 1
+          fi
+      - name: Upload logs
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: ios-build-logs
+          path: |
+            swiftpm-ios.log
+            xcodebuild.log
+          if-no-files-found: ignore

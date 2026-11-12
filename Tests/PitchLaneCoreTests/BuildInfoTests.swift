@@ -1,5 +1,5 @@
 import XCTest
-@testable import PitchLaneCore
+import PitchLaneCore
 
 final class BuildInfoTests: XCTestCase {
     func testReadsInfoDictionary() {

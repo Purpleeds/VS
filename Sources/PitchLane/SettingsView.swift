@@ -12,6 +12,12 @@ struct SettingsView: View {
                 LabeledContent("Version", value: build.version)
                 LabeledContent("Build", value: build.build)
             }
+            Section("Notes") {
+                Picker("Note names", selection: $model.settings.accidentals) {
+                    Text("Sharps (C♯, F♯)").tag(Accidentals.sharps)
+                    Text("Flats (D♭, G♭)").tag(Accidentals.flats)
+                }
+            }
             Section("Developer") {
                 Toggle("Debug overlay", isOn: $model.settings.debugOverlay)
                 NavigationLink(value: Route.logs) {

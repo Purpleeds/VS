@@ -69,6 +69,12 @@ public struct AnalysisTiming: Sendable, Equatable {
         maxSeconds = max(maxSeconds, seconds)
     }
 
+    public mutating func merge(_ other: AnalysisTiming) {
+        count += other.count
+        totalSeconds += other.totalSeconds
+        maxSeconds = max(maxSeconds, other.maxSeconds)
+    }
+
     public var averageSeconds: Double { count > 0 ? totalSeconds / Double(count) : 0 }
 }
 

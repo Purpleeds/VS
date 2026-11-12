@@ -10,5 +10,12 @@ enum Theme {
     static let accentSecondary = Color(red: 1.00, green: 0.45, blue: 0.55)
     static let textPrimary = Color.white
     static let textSecondary = Color(red: 0.62, green: 0.66, blue: 0.78)
+    static let grid = Color(red: 0.62, green: 0.66, blue: 0.78)
+    /// In tune / good signal.
+    static let good = Color(red: 0.30, green: 0.88, blue: 0.48)
+    /// Close.
+    static let warn = Color(red: 1.00, green: 0.78, blue: 0.28)
+    /// Off.
+    static let bad = Color(red: 1.00, green: 0.38, blue: 0.38)
 }
 #endif

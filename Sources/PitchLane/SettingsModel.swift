@@ -24,13 +24,13 @@ final class SettingsModel: ObservableObject {
             AppLog.error("Settings load failed, using defaults: \(error)", category: "settings")
         }
         self.settings = loaded
-        AppLog.info("Settings loaded (debugOverlay=\(loaded.debugOverlay))", category: "settings")
+        AppLog.info("Settings loaded (debugOverlay=\(loaded.debugOverlay), accidentals=\(loaded.accidentals.rawValue))", category: "settings")
     }
 
     private func persist() {
         do {
             try store.save(settings)
-            AppLog.info("Settings saved (debugOverlay=\(settings.debugOverlay))", category: "settings")
+            AppLog.info("Settings saved (debugOverlay=\(settings.debugOverlay), accidentals=\(settings.accidentals.rawValue))", category: "settings")
         } catch {
             AppLog.error("Settings save failed: \(error)", category: "settings")
         }

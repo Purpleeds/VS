@@ -41,9 +41,4 @@ struct LibraryView: View {
     }
 }
 
-struct TunerView: View {
-    var body: some View {
-        PlaceholderScreen(title: "Tuner", symbol: "tuningfork", note: "Live pitch readout. Coming soon.")
-    }
-}
 #endif

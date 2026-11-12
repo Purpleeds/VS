@@ -77,4 +77,17 @@ final class PitchSessionStatsTests: XCTestCase {
         XCTAssertEqual(events.count, 2)
         XCTAssertTrue(stats.finish().isEmpty)
     }
+
+    func testAnalysisTimingMerge() {
+        var a = AnalysisTiming()
+        a.record(0.001)
+        a.record(0.003)
+        var b = AnalysisTiming()
+        b.record(0.005)
+        a.merge(b)
+        XCTAssertEqual(a.count, 3)
+        XCTAssertEqual(a.averageSeconds, 0.003, accuracy: 1e-12)
+        XCTAssertEqual(a.maxSeconds, 0.005)
+        XCTAssertEqual(AnalysisTiming().averageSeconds, 0)
+    }
 }

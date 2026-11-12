@@ -8,7 +8,7 @@ report the build number, on-phone test checklist.
 SPM package (`PitchLaneCore`, `PitchLane`, tests), xtool config, Info.plist, AppLog + Logs screen,
 settings JSON persistence, placeholder home (Play / Library / Tuner / Settings), build/version display.
 
-## 1. Pitch engine
+## 1. Pitch engine (done)
 
 Goal: a trustworthy real-time pitch reading from the microphone: accurate, fast, stable.
 
@@ -85,7 +85,7 @@ Measured and compensated in step 4.
 - App: Library (search, swipe delete, detail sheet with range/length/notes), Files import incl. backing audio,
   MIDI melody-track picker.
 
-## 3. Note lane + scoring
+## 3. Note lane + scoring (done)
 
 Goal: the game screen (landscape), Trombone Champ style, scored fairly at 120 fps.
 

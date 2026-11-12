@@ -298,18 +298,22 @@ final class AudioInput: ObservableObject {
             diagnostics.update(stats)
         }
         guard state == .running, let last = batch.frames.last else { return }
-        var updated = history
-        for frame in batch.frames {
-            updated.append(frame)
-        }
-        history = updated
-        latest = last
-        if let voiced = batch.frames.last(where: { $0.isVoiced }) {
-            lastVoiced = voiced
-        }
-        let range = PitchGraphScale.range(for: updated, current: graphRange, bounds: Self.displayBounds)
-        if range != graphRange {
-            graphRange = range
+        // Only the tuner needs the published stream. Publishing ~47x/s while the game runs would re-render
+        // every observing view on top of the game's own 120 Hz timeline.
+        if clients.contains("tuner") {
+            var updated = history
+            for frame in batch.frames {
+                updated.append(frame)
+            }
+            history = updated
+            latest = last
+            if let voiced = batch.frames.last(where: { $0.isVoiced }) {
+                lastVoiced = voiced
+            }
+            let range = PitchGraphScale.range(for: updated, current: graphRange, bounds: Self.displayBounds)
+            if range != graphRange {
+                graphRange = range
+            }
         }
         if !frameListeners.isEmpty {
             let arrival = CACurrentMediaTime()

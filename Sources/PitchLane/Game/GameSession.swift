@@ -78,9 +78,10 @@ final class GameSession: ObservableObject {
     private static let listenerName = "game"
 
     init(song: Song, options: GameOptions) {
+        let viewport = LaneViewport(song: song)
         self.song = song
         self.options = options
-        viewport = LaneViewport(song: song)
+        self.viewport = viewport
         noteIndex = NoteIndex(song: song)
         clock = GameClock(songDuration: song.duration)
         keeper = ScoreKeeper(song: song, rules: ScoringRules(difficulty: options.difficulty, octaveAgnostic: options.octaveAgnostic))

@@ -1,0 +1,3 @@
+version: 1
+# No bundleID on purpose: the app must never hardcode one (use Bundle.main.bundleIdentifier).
+infoPath: Info.plist

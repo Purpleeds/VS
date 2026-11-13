@@ -249,10 +249,13 @@ public struct GameResult: Codable, Sendable, Equatable {
     public var counts: [NoteRating: Int]
     public var noteCount: Int
     public var date: Date
+    /// The run ended because the energy bar emptied.
+    public var failed: Bool
 
     public init(
         songID: String, songTitle: String, difficulty: Difficulty, octaveAgnostic: Bool, score: Int,
-        accuracy: Double, grade: Grade, maxCombo: Int, counts: [NoteRating: Int], noteCount: Int, date: Date
+        accuracy: Double, grade: Grade, maxCombo: Int, counts: [NoteRating: Int], noteCount: Int, date: Date,
+        failed: Bool = false
     ) {
         self.songID = songID
         self.songTitle = songTitle
@@ -265,6 +268,7 @@ public struct GameResult: Codable, Sendable, Equatable {
         self.counts = counts
         self.noteCount = noteCount
         self.date = date
+        self.failed = failed
     }
 }
 

@@ -18,6 +18,18 @@ public struct AppSettings: Codable, Equatable, Sendable {
     public var guideVolume: Double
     /// Backing track volume 0...1.
     public var backingVolume: Double
+    /// The singer's range from the range test (nil = not tested).
+    public var vocalRange: VocalRange?
+    /// Semitone shift chosen per song id (auto-transpose).
+    public var songTranspose: [String: Int]
+    /// Frames quieter than this are unvoiced (dBFS). Lower = more sensitive.
+    public var noiseGateDBFS: Double
+    /// Widen the detector to ~40 Hz - 2 kHz for instruments.
+    public var instrumentMode: Bool
+    /// Frame-rate counter on the game screen.
+    public var showFPS: Bool
+    /// Songs end when the energy bar empties (off = never fail).
+    public var failEnabled: Bool
     /// Guide tone on for Easy/Normal (default on) and Hard (default off).
     public var guideOnEasyNormal: Bool
     public var guideOnHard: Bool
@@ -32,7 +44,13 @@ public struct AppSettings: Codable, Equatable, Sendable {
         guideVolume: Double = 0.6,
         backingVolume: Double = 0.8,
         guideOnEasyNormal: Bool = true,
-        guideOnHard: Bool = false
+        guideOnHard: Bool = false,
+        vocalRange: VocalRange? = nil,
+        songTranspose: [String: Int] = [:],
+        noiseGateDBFS: Double = -50,
+        instrumentMode: Bool = false,
+        showFPS: Bool = false,
+        failEnabled: Bool = true
     ) {
         self.debugOverlay = debugOverlay
         self.accidentals = accidentals
@@ -44,6 +62,25 @@ public struct AppSettings: Codable, Equatable, Sendable {
         self.backingVolume = backingVolume
         self.guideOnEasyNormal = guideOnEasyNormal
         self.guideOnHard = guideOnHard
+        self.vocalRange = vocalRange
+        self.songTranspose = songTranspose
+        self.noiseGateDBFS = noiseGateDBFS
+        self.instrumentMode = instrumentMode
+        self.showFPS = showFPS
+        self.failEnabled = failEnabled
+    }
+
+    public static let noiseGateRange: ClosedRange<Double> = -65 ... -30
+
+    /// The pipeline settings these choices imply.
+    public func pipelineConfiguration() -> PitchPipelineConfiguration {
+        .configured(instrument: instrumentMode, noiseGateDBFS: noiseGateDBFS, accidentals: accidentals)
+    }
+
+    public func transpose(for songID: String) -> Int { songTranspose[songID] ?? 0 }
+
+    public mutating func setTranspose(_ semitones: Int, for songID: String) {
+        if semitones == 0 { songTranspose[songID] = nil } else { songTranspose[songID] = max(-36, min(36, semitones)) }
     }
 
     public func guideEnabled(for difficulty: Difficulty) -> Bool {
@@ -65,6 +102,12 @@ public struct AppSettings: Codable, Equatable, Sendable {
         case backingVolume
         case guideOnEasyNormal
         case guideOnHard
+        case vocalRange
+        case songTranspose
+        case noiseGateDBFS
+        case instrumentMode
+        case showFPS
+        case failEnabled
     }
 
     public init(from decoder: Decoder) throws {
@@ -79,5 +122,12 @@ public struct AppSettings: Codable, Equatable, Sendable {
         self.backingVolume = min(1, max(0, try container.decodeIfPresent(Double.self, forKey: .backingVolume) ?? 0.8))
         self.guideOnEasyNormal = try container.decodeIfPresent(Bool.self, forKey: .guideOnEasyNormal) ?? true
         self.guideOnHard = try container.decodeIfPresent(Bool.self, forKey: .guideOnHard) ?? false
+        self.vocalRange = try? container.decodeIfPresent(VocalRange.self, forKey: .vocalRange)
+        self.songTranspose = (try? container.decodeIfPresent([String: Int].self, forKey: .songTranspose)) ?? [:]
+        let gate = try container.decodeIfPresent(Double.self, forKey: .noiseGateDBFS) ?? -50
+        self.noiseGateDBFS = min(Self.noiseGateRange.upperBound, max(Self.noiseGateRange.lowerBound, gate))
+        self.instrumentMode = try container.decodeIfPresent(Bool.self, forKey: .instrumentMode) ?? false
+        self.showFPS = try container.decodeIfPresent(Bool.self, forKey: .showFPS) ?? false
+        self.failEnabled = try container.decodeIfPresent(Bool.self, forKey: .failEnabled) ?? true
     }
 }

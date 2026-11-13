@@ -20,6 +20,19 @@ public struct PitchPipelineConfiguration: Sendable, Equatable {
     }
 }
 
+extension PitchPipelineConfiguration {
+    /// Detector range and noise gate from the user's settings.
+    public static func configured(instrument: Bool, noiseGateDBFS: Double, accidentals: Accidentals) -> PitchPipelineConfiguration {
+        var stabilizer = PitchStabilizerConfiguration()
+        stabilizer.noiseGateDBFS = noiseGateDBFS
+        return PitchPipelineConfiguration(
+            detector: instrument ? .instrument : .voice,
+            stabilizer: stabilizer,
+            accidentals: accidentals
+        )
+    }
+}
+
 /// Mic samples in, `PitchFrame`s out: resample -> sliding window -> YIN -> stabiliser.
 /// Not thread-safe; drive it from one serial queue. Steady-state processing does not allocate
 /// apart from the note-name strings in emitted frames.

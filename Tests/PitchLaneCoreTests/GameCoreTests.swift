@@ -386,3 +386,53 @@ final class LaneViewportTests: XCTestCase {
         XCTAssertEqual(try XCTUnwrap(b.value), 70, accuracy: 0.01)
     }
 }
+
+final class GameClockRateAndSeekTests: XCTestCase {
+    func testHalfSpeedKeepsRealTimeCountdown() {
+        var clock = GameClock(songDuration: 10, rate: 0.5)
+        clock.start(at: 100)
+        XCTAssertEqual(clock.songTime(at: 100), -1.5, accuracy: 1e-12, "3 real seconds of lead-in = 1.5 song seconds")
+        XCTAssertEqual(clock.countdown(at: 100.1), 3)
+        XCTAssertEqual(clock.countdown(at: 102.5), 1)
+        XCTAssertEqual(clock.songTime(at: 103), 0, accuracy: 1e-12)
+        XCTAssertEqual(clock.songTime(at: 105), 1, accuracy: 1e-12, "2 real seconds = 1 song second at half speed")
+        clock.pause(at: 105)
+        clock.resume(at: 110)
+        XCTAssertEqual(clock.songTime(at: 113), 1, accuracy: 1e-12)
+        XCTAssertEqual(clock.songTime(at: 115), 2, accuracy: 1e-12)
+        XCTAssertEqual(clock.rate, 0.5)
+    }
+
+    func testRateIsClamped() {
+        XCTAssertEqual(GameClock(songDuration: 1, rate: 0).rate, 0.1)
+        XCTAssertEqual(GameClock(songDuration: 1, rate: 9).rate, 2)
+    }
+
+    func testSeekJumpsButEarlierHostTimesKeepTheOldMapping() {
+        var clock = GameClock(songDuration: 100, leadIn: 0)
+        clock.start(at: 0)
+        XCTAssertEqual(clock.songTime(at: 10), 10, accuracy: 1e-12)
+        clock.seek(toSongTime: 2, at: 10)
+        XCTAssertEqual(clock.songTime(at: 9.9), 9.9, accuracy: 1e-12, "what is still audible keeps playing")
+        XCTAssertEqual(clock.songTime(at: 10), 2, accuracy: 1e-12)
+        XCTAssertEqual(clock.songTime(at: 11.5), 3.5, accuracy: 1e-12)
+        XCTAssertTrue(clock.isAdvancing(at: 9.9))
+        XCTAssertTrue(clock.isAdvancing(at: 10.1))
+        XCTAssertEqual(clock.phase(at: 10.1), .playing)
+        XCTAssertNil(clock.countdown(at: 10.1))
+        XCTAssertEqual(clock.anchor?.songTime, 2)
+        XCTAssertEqual(clock.anchor?.time, 10)
+    }
+
+    func testSeekWhilePausedAndSeekAtHalfSpeed() {
+        var clock = GameClock(songDuration: 100, leadIn: 0, rate: 0.5)
+        clock.start(at: 0)
+        clock.pause(at: 4)
+        clock.seek(toSongTime: 7, at: 5)
+        clock.resume(at: 6)
+        XCTAssertEqual(clock.songTime(at: 9), 7, accuracy: 1e-12)
+        XCTAssertEqual(clock.songTime(at: 11), 8, accuracy: 1e-12)
+        clock.seek(toSongTime: 1, at: 11)
+        XCTAssertEqual(clock.songTime(at: 12), 1.5, accuracy: 1e-12)
+    }
+}

@@ -71,14 +71,17 @@ final class MIDIOverlapTests: XCTestCase {
 
     func testDescendingLegatoKeepsLyrics() throws {
         // 64 at 0-480, 62 at 460-940, 60 at 920-1400: each lower note starts under the higher one.
-        let events = M.tempo(0, bpm: 120)
-            + M.meta(0, type: 0x05, "one") + M.on(0, 64)
-            + M.meta(460, type: 0x05, "two") + M.on(0, 62)
-            + M.off(20, 64)
-            + M.meta(440, type: 0x05, "three") + M.on(0, 60)
-            + M.off(20, 62)
-            + M.off(460, 60)
-            + M.end()
+        let parts: [[UInt8]] = [
+            M.tempo(0, bpm: 120),
+            M.meta(0, type: 0x05, "one"), M.on(0, 64),
+            M.meta(460, type: 0x05, "two"), M.on(0, 62),
+            M.off(20, 64),
+            M.meta(440, type: 0x05, "three"), M.on(0, 60),
+            M.off(20, 62),
+            M.off(460, 60),
+            M.end(),
+        ]
+        let events = parts.flatMap { $0 }
         let song = try MIDIFile.parse(Data(M.header(format: 0, tracks: 1) + M.track(events))).song(track: 0, id: "l")
         XCTAssertEqual(song.notes.map(\.pitch), [64, 62, 60])
         XCTAssertEqual(song.notes.map(\.lyric), ["one", "two", "three"])
@@ -94,7 +97,12 @@ final class MIDIOverlapTests: XCTestCase {
 
     func testAbsurdTempoEventIsIgnored() throws {
         // FF 51 03 00 00 01: 1 µs per quarter.
-        let events = M.tempo(0, bpm: 120) + M.vlq(0) + [0xFF, 0x51, 0x03, 0x00, 0x00, 0x01] + M.on(0, 60) + M.off(480, 60) + M.end()
+        let absurdTempo: [UInt8] = [0x00, 0xFF, 0x51, 0x03, 0x00, 0x00, 0x01]
+        var events: [UInt8] = M.tempo(0, bpm: 120)
+        events.append(contentsOf: absurdTempo)
+        events.append(contentsOf: M.on(0, 60))
+        events.append(contentsOf: M.off(480, 60))
+        events.append(contentsOf: M.end())
         let song = try MIDIFile.parse(Data(M.header(format: 0, tracks: 1) + M.track(events))).song(track: 0, id: "t")
         XCTAssertEqual(song.notes[0].duration, 0.5, accuracy: 1e-9)
         XCTAssertTrue(song.tempo.allSatisfy { $0.beatDuration >= 0.05 })

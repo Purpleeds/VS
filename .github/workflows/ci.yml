@@ -22,9 +22,17 @@ jobs:
       - name: Swift version
         run: swift --version
       - name: Test (debug, warnings are errors)
-        run: swift test -Xswiftc -warnings-as-errors
+        shell: bash
+        run: |
+          set -o pipefail
+          swift test -Xswiftc -warnings-as-errors 2>&1 | tee test-debug.log || {
+            echo "=== FAILURE SUMMARY ==="; grep -E "error:|' failed \(" test-debug.log | sort -u | tail -80; exit 1; }
       - name: Test (release, warnings are errors)
-        run: swift test -c release -Xswiftc -warnings-as-errors
+        shell: bash
+        run: |
+          set -o pipefail
+          swift test -c release -Xswiftc -warnings-as-errors 2>&1 | tee test-release.log || {
+            echo "=== FAILURE SUMMARY ==="; grep -E "error:|' failed \(" test-release.log | sort -u | tail -80; exit 1; }
 
   ios-build:
     name: iOS compile check (release)

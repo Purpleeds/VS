@@ -135,7 +135,7 @@ final class TransposerTests: XCTestCase {
     func testFitAndBestShift() {
         let tenor = VocalRange(low: 48, high: 69) // C3-A4
         let high = song([60, 72, 79, 81]) // up to A5
-        XCTAssertEqual(SongTransposer.fit(of: high, in: tenor), .outside(below: 0, above: 2))
+        XCTAssertEqual(SongTransposer.fit(of: high, in: tenor), .outside(below: 0, above: 3))
         XCTAssertEqual(SongTransposer.fit(of: high, shift: -12, in: tenor), .fits)
         XCTAssertEqual(SongTransposer.bestShift(for: high, in: tenor), -12, "the only shift that fits")
         let low = song([36, 40, 43])

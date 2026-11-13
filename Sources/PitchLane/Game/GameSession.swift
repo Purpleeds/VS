@@ -12,6 +12,11 @@ struct GameOptions: Hashable {
     var guideTone: Bool
     var guideVolume: Double
     var backingVolume: Double
+    var practice: PracticeOptions = .normal
+    /// Songs end when the energy bar empties (also needs `practice.noFail` off and no loop).
+    var failEnabled: Bool = true
+    /// Semitones the song was shifted by (for the history).
+    var transpose: Int = 0
 }
 
 /// Runs one play-through: song clock on the audio output timeline, scoring, guide tone, backing track,
@@ -54,6 +59,9 @@ final class GameSession: ObservableObject {
     @Published private(set) var results: [NoteResult] = []
     @Published private(set) var guideOn: Bool
     @Published private(set) var hasBacking = false
+    @Published private(set) var health = 1.0
+    @Published private(set) var loopPasses: [Double] = []
+    @Published private(set) var failed = false
 
     // Render state (read by the Canvas every frame).
     private(set) var trail: [TrailPoint] = []
@@ -66,6 +74,12 @@ final class GameSession: ObservableObject {
     private(set) var replay = ReplayTrace()
 
     private var keeper: ScoreKeeper
+    /// Notes scored this pass (the loop section, or the whole song) and their indices in `song`.
+    private var scoringSong: Song
+    private var scoringIndices: [Int]
+    private var healthMeter: HealthMeter
+    /// The energy bar is in play (fail on, no-fail off, not looping).
+    var showsHealth: Bool { healthMeter.enabled }
     private var timebase: SongTimebase?
     private var smoother = ViewportSmoother()
     private var lastRenderHost: Double?
@@ -74,6 +88,7 @@ final class GameSession: ObservableObject {
     private var nextStatsReport = 0.0
     private var worstFrameSeen = 0.0
     private var finishScheduled = false
+    private var pendingVisualReset = false
     private weak var audio: AudioInput?
     private weak var scores: ScoreStore?
     private var backingURL: URL?
@@ -88,10 +103,22 @@ final class GameSession: ObservableObject {
         self.options = options
         self.viewport = viewport
         noteIndex = NoteIndex(song: song)
-        keeper = ScoreKeeper(song: song, rules: ScoringRules(difficulty: options.difficulty, octaveAgnostic: options.octaveAgnostic))
-        pitchRange = viewport.range(center: viewport.targetCenter(at: 0))
+        let scoring = Self.scoringSong(for: song, practice: options.practice)
+        scoringSong = scoring.song
+        scoringIndices = scoring.indices
+        keeper = ScoreKeeper(song: scoring.song, rules: ScoringRules(difficulty: options.difficulty, octaveAgnostic: options.octaveAgnostic))
+        healthMeter = HealthMeter(enabled: options.failEnabled && !options.practice.noFail && options.practice.loop == nil)
+        pitchRange = viewport.range(center: viewport.targetCenter(at: options.practice.loop?.lowerBound ?? 0))
         guideOn = options.guideTone
     }
+
+    private static func scoringSong(for song: Song, practice: PracticeOptions) -> (song: Song, indices: [Int]) {
+        guard let loop = practice.loop else { return (song, Array(song.notes.indices)) }
+        let section = song.section(from: loop.lowerBound, to: loop.upperBound)
+        return (section.song, section.originalIndices)
+    }
+
+    private var loopStartSong: Double { max(0, (options.practice.loop?.lowerBound ?? 0) - 1) }
 
     // MARK: Lifecycle
 
@@ -99,7 +126,8 @@ final class GameSession: ObservableObject {
         self.audio = audio
         self.scores = scores
         previousBest = scores.best(songID: song.id, difficulty: options.difficulty)
-        timebase = SongTimebase(audio: audio, songDuration: song.duration)
+        timebase = SongTimebase(audio: audio, songDuration: song.duration, rate: options.practice.speed)
+        audio.backing.setRate(options.practice.speed)
         audio.addFrameListener(Self.listenerName) { [weak self] batch, arrival in
             self?.receive(batch, arrival: arrival)
         }
@@ -113,7 +141,9 @@ final class GameSession: ObservableObject {
                 + "backing \(hasBacking ? String(format: "%.0f%%", options.backingVolume * 100) : "none"), "
                 + "\(keeper.scoredNoteCount) scored notes, \(song.summary.durationText), "
                 + "lane \(Int(viewport.fullRange.lowerBound))-\(Int(viewport.fullRange.upperBound))\(viewport.pans ? " (pans)" : ""), "
-                + "route \(latency.route.rawValue) in \(Self.ms(latency.input)) out \(Self.ms(latency.output)) correction \(Self.ms(latency.correction)) ms",
+                + "route \(latency.route.rawValue) in \(Self.ms(latency.input)) out \(Self.ms(latency.output)) correction \(Self.ms(latency.correction)) ms, "
+                + "practice speed \(options.practice.speedText) loop \(options.practice.loop.map { String(format: "%.1f-%.1f s", $0.lowerBound, $0.upperBound) } ?? "off") "
+                + "noFail \(options.practice.noFail) fail \(options.failEnabled) shift \(options.transpose)",
             category: "game"
         )
         startWhenClockIsReady()
@@ -145,6 +175,7 @@ final class GameSession: ObservableObject {
         audio?.removeFrameListener(Self.listenerName)
         audio?.cancelClicks()
         audio?.backing.unload()
+        audio?.backing.setRate(1)
         timebase?.stop()
         audio?.installGuide(nil)
         if phase != .finished {
@@ -156,10 +187,10 @@ final class GameSession: ObservableObject {
     /// Starts the countdown as soon as the output clock is ticking.
     private func startWhenClockIsReady() {
         guard let timebase else { return }
-        if timebase.start() {
+        if timebase.start(from: options.practice.loop == nil ? 0 : loopStartSong) {
             clickHorizon = -Double.infinity
             phase = .running
-            scheduleBacking(fromSong: 0)
+            scheduleBacking(fromSong: options.practice.loop == nil ? 0 : loopStartSong)
         } else {
             phase = .waitingForAudio
         }
@@ -189,7 +220,11 @@ final class GameSession: ObservableObject {
     func restart() {
         audio?.cancelClicks()
         audio?.backing.stop()
-        keeper = ScoreKeeper(song: song, rules: ScoringRules(difficulty: options.difficulty, octaveAgnostic: options.octaveAgnostic))
+        keeper = ScoreKeeper(song: scoringSong, rules: ScoringRules(difficulty: options.difficulty, octaveAgnostic: options.octaveAgnostic))
+        healthMeter.reset()
+        health = 1
+        failed = false
+        loopPasses = []
         score = 0
         combo = 0
         multiplier = 1
@@ -297,15 +332,21 @@ final class GameSession: ObservableObject {
            let keep = trail.firstIndex(where: { $0.time >= cutoff - 0.6 }) {
             trail.removeFirst(keep)
         }
-        if changed { publishScore() }
+        if changed {
+            publishScore()
+            if healthMeter.isFailed { complete(failed: true) }
+        }
     }
 
     private func record(_ finished: [NoteResult]) {
         for note in finished {
-            ratings[note.noteIndex] = note.rating
-            popups.append(Popup(noteIndex: note.noteIndex, rating: note.rating, points: note.points, songTime: note.endTime))
+            let full = scoringIndices[note.noteIndex]
+            ratings[full] = note.rating
+            popups.append(Popup(noteIndex: full, rating: note.rating, points: note.points, songTime: note.endTime))
+            healthMeter.apply(note.rating)
         }
         results = keeper.results
+        health = healthMeter.value
         if popups.count > 24 { popups.removeFirst(popups.count - 24) }
     }
 
@@ -364,8 +405,19 @@ final class GameSession: ObservableObject {
         let center = smoother.update(target: target, dt: dt)
         pitchRange = viewport.range(center: center)
 
-        if options.clickTrack, phase == .running, let rendered = timebase.renderedSongTime(), timebase.isAdvancing(atHost: host) {
+        if options.clickTrack, phase == .running, !timebase.isSeekPending(),
+           let rendered = timebase.renderedSongTime(), timebase.isAdvancing(atHost: host) {
             scheduleClicks(renderedSong: rendered)
+        }
+        if let loop = options.practice.loop, phase == .running {
+            if pendingVisualReset, t < loop.upperBound - 1.5 {
+                pendingVisualReset = false
+                ratings = [:]
+                popups = []
+            }
+            if !timebase.isSeekPending(), let rendered = timebase.renderedSongTime(), rendered >= loop.upperBound - 0.1 * options.practice.speed {
+                wrapLoop(loop)
+            }
         }
         popups.removeAll { t - $0.songTime > 1.2 }
 
@@ -385,15 +437,46 @@ final class GameSession: ObservableObject {
         return t
     }
 
+    // MARK: Loops
+
+    /// Ends one pass of the practice loop and jumps back, exactly when the audio reaches the loop end.
+    private func wrapLoop(_ loop: ClosedRange<Double>) {
+        guard let timebase else { return }
+        let target = loopStartSong
+        guard timebase.seek(toSongTime: target, whenRenderingSongTime: loop.upperBound) != nil else { return }
+        record(keeper.finish())
+        let pass = keeper.accuracy
+        loopPasses.append(pass)
+        AppLog.info(
+            "Loop pass \(loopPasses.count): accuracy \(String(format: "%.1f", pass * 100))%, score \(keeper.score), best combo \(keeper.maxCombo)",
+            category: "game"
+        )
+        keeper = ScoreKeeper(song: scoringSong, rules: ScoringRules(difficulty: options.difficulty, octaveAgnostic: options.octaveAgnostic))
+        publishScore()
+        latestFrameSongTime = -.infinity
+        trail = []
+        pendingVisualReset = true
+        audio?.cancelClicks()
+        clickHorizon = target
+        audio?.backing.stop()
+        scheduleBacking(fromSong: target)
+    }
+
     // MARK: Finish
 
     private func finish() {
+        complete(failed: false)
+    }
+
+    /// Ends the play-through: finished normally, or failed when the energy bar emptied.
+    private func complete(failed didFail: Bool) {
         guard phase == .running else { return }
-        let finished = keeper.finish()
-        record(finished)
+        if !didFail { record(keeper.finish()) }
         publishScore()
-        let summary = keeper.result(songID: song.id, songTitle: song.title)
-        isNewBest = scores?.record(summary) ?? false
+        var summary = keeper.result(songID: song.id, songTitle: song.title)
+        summary.failed = didFail
+        failed = didFail
+        isNewBest = scores?.record(summary, practice: options.practice, transpose: options.transpose) ?? false
         result = summary
         phase = .finished
         audio?.cancelClicks()
@@ -401,8 +484,9 @@ final class GameSession: ObservableObject {
         timebase?.stop()
         let counts = NoteRating.allCases.map { "\($0.rawValue) \(summary.counts[$0, default: 0])" }.joined(separator: ", ")
         AppLog.info(
-            "Game finished: score \(summary.score), grade \(summary.grade.rawValue), accuracy \(String(format: "%.1f", summary.accuracy * 100))%, "
-                + "max combo \(summary.maxCombo), \(counts)\(isNewBest ? ", NEW BEST" : "")",
+            "Game \(didFail ? "FAILED (energy ran out)" : "finished"): score \(summary.score), grade \(summary.grade.rawValue), "
+                + "accuracy \(String(format: "%.1f", summary.accuracy * 100))%, max combo \(summary.maxCombo), \(counts)"
+                + "\(isNewBest ? ", NEW BEST" : "")\(options.practice.isPractice ? ", practice \(options.practice.speedText)" : "")",
             category: "game"
         )
         logRenderStats()
@@ -420,17 +504,24 @@ final class GameSession: ObservableObject {
     }
 }
 
-/// Personal bests, persisted as JSON in Application Support.
+/// Personal bests and the play history, persisted as JSON in Application Support.
 @MainActor
 final class ScoreStore: ObservableObject {
     @Published private(set) var bests = PersonalBests()
-    private let store = JSONFileStore<PersonalBests>(url: AppPaths.personalBestsFile)
+    @Published private(set) var history = GameHistory()
+    private let bestsStore = JSONFileStore<PersonalBests>(url: AppPaths.personalBestsFile)
+    private let historyStore = JSONFileStore<GameHistory>(url: AppPaths.historyFile)
 
     init() {
         do {
-            bests = try store.load() ?? PersonalBests()
+            bests = try bestsStore.load() ?? PersonalBests()
         } catch {
             AppLog.error("Personal bests unreadable, starting fresh: \(error)", category: "game")
+        }
+        do {
+            history = try historyStore.load() ?? GameHistory()
+        } catch {
+            AppLog.error("History unreadable, starting fresh: \(error)", category: "game")
         }
     }
 
@@ -438,16 +529,19 @@ final class ScoreStore: ObservableObject {
         bests.best(songID: songID, difficulty: difficulty)
     }
 
-    /// Returns true when the result is a new personal best.
-    func record(_ result: GameResult) -> Bool {
+    /// Adds the run to the history; completed full-speed runs may also set a personal best.
+    /// Returns true when it is a new personal best.
+    func record(_ result: GameResult, practice: PracticeOptions, transpose: Int) -> Bool {
+        var updatedHistory = history
+        updatedHistory.add(GameRecord(result: result, practice: practice, failed: result.failed, transpose: transpose))
+        history = updatedHistory
+        save(history, to: historyStore, "history")
+
+        guard !practice.isPractice, !result.failed else { return false }
         var updated = bests
         guard updated.record(result) else { return false }
         bests = updated
-        do {
-            try store.save(updated)
-        } catch {
-            AppLog.error("Saving personal bests failed: \(error)", category: "game")
-        }
+        save(updated, to: bestsStore, "personal bests")
         return true
     }
 
@@ -455,7 +549,27 @@ final class ScoreStore: ObservableObject {
         var updated = bests
         updated.remove(songID: songID)
         bests = updated
-        try? store.save(updated)
+        save(updated, to: bestsStore, "personal bests")
+        var updatedHistory = history
+        updatedHistory.removeAll(songID: songID)
+        history = updatedHistory
+        save(updatedHistory, to: historyStore, "history")
+    }
+
+    func resetAll() {
+        bests = PersonalBests()
+        history = GameHistory()
+        save(bests, to: bestsStore, "personal bests")
+        save(history, to: historyStore, "history")
+        AppLog.info("Scores and history cleared", category: "game")
+    }
+
+    private func save<T: Codable & Sendable>(_ value: T, to store: JSONFileStore<T>, _ what: String) {
+        do {
+            try store.save(value)
+        } catch {
+            AppLog.error("Saving \(what) failed: \(error)", category: "game")
+        }
     }
 }
 #endif

@@ -35,6 +35,10 @@ final class LatencyStore: ObservableObject {
         save(updated, "reset \(route.rawValue)")
     }
 
+    func resetAll() {
+        save(LatencyProfiles(), "reset all routes")
+    }
+
     private func save(_ updated: LatencyProfiles, _ what: String) {
         profiles = updated
         do {

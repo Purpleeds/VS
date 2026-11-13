@@ -39,8 +39,8 @@ struct RootView: View {
     var body: some View {
         HomeView()
             .modifier(DebugOverlay(enabled: settings.settings.debugOverlay))
-            .onChange(of: settings.settings.accidentals, initial: true) { _, accidentals in
-                audio.setAccidentals(accidentals)
+            .onChange(of: settings.settings.pipelineConfiguration(), initial: true) { _, configuration in
+                audio.setDetection(configuration)
             }
             .onChange(of: scenePhase) { _, phase in
                 switch phase {

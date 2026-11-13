@@ -32,14 +32,14 @@ final class AudioInput: ObservableObject {
         case failed(String)
     }
 
-    /// Detector range shown by graphs (C2...C6).
-    static let displayBounds: ClosedRange<Double> = 36...84
 
     @Published private(set) var state: State = .idle
     @Published private(set) var latest: PitchFrame?
     @Published private(set) var lastVoiced: PitchFrame?
     @Published private(set) var history = PitchHistory(duration: 5)
     @Published private(set) var graphRange: ClosedRange<Double> = 54...66
+    /// Detector range drawn by graphs (voice C2...C6; instrument mode wider).
+    @Published private(set) var displayBounds: ClosedRange<Double> = PitchDetectorConfiguration.voice.displayBounds
 
     let diagnostics = AudioDiagnostics()
     /// Per-route latency calibration (also injected as an environment object).
@@ -52,6 +52,7 @@ final class AudioInput: ObservableObject {
     private var clients: Set<String> = []
     private var inBackground = false
     private var accidentals: Accidentals = .sharps
+    private var pipelineConfiguration = PitchPipelineConfiguration()
     private var tapSampleRate: Double = 0
     private var observers: [NSObjectProtocol] = []
     private var isStarting = false
@@ -140,8 +141,8 @@ final class AudioInput: ObservableObject {
         guideVoice?.install(renderer)
     }
 
-    func setGuideTimeline(anchorRender: Double, anchorSong: Double) {
-        guideVoice?.setTimeline(anchorRender: anchorRender, anchorSong: anchorSong)
+    func setGuideTimeline(anchorRender: Double, anchorSong: Double, rate: Double = 1) {
+        guideVoice?.setTimeline(anchorRender: anchorRender, anchorSong: anchorSong, rate: rate)
     }
 
     func stopGuideTimeline() {
@@ -234,7 +235,34 @@ final class AudioInput: ObservableObject {
 
     func setAccidentals(_ accidentals: Accidentals) {
         self.accidentals = accidentals
+        pipelineConfiguration.accidentals = accidentals
         analyzer.setAccidentals(accidentals)
+    }
+
+    /// Applies instrument mode / noise gate (and note spelling). Restarts analysis if the mic is running and
+    /// the detector or gate changed; a spelling change alone just relabels.
+    func setDetection(_ configuration: PitchPipelineConfiguration) {
+        guard configuration != pipelineConfiguration else { return }
+        let detectorChanged = configuration.detector != pipelineConfiguration.detector
+        let analysisChanged = detectorChanged || configuration.stabilizer != pipelineConfiguration.stabilizer
+        pipelineConfiguration = configuration
+        accidentals = configuration.accidentals
+        guard analysisChanged else {
+            analyzer.setAccidentals(configuration.accidentals)
+            return
+        }
+        if detectorChanged {
+            displayBounds = configuration.detector.displayBounds
+            history.removeAll()
+            graphRange = (displayBounds.lowerBound + 18)...(displayBounds.lowerBound + 30)
+        }
+        if tapSampleRate > 0 {
+            analyzer.prepare(sampleRate: tapSampleRate, configuration: configuration)
+        }
+        AppLog.info(
+            "Detection settings: \(configuration.detector == .instrument ? "instrument" : "voice") range, gate \(Int(configuration.stabilizer.noiseGateDBFS)) dBFS",
+            category: "audio"
+        )
     }
 
     func enterBackground() {
@@ -355,7 +383,7 @@ final class AudioInput: ObservableObject {
         guard format.sampleRate > 0, format.channelCount > 0 else {
             throw AudioInputError.noInputAvailable
         }
-        analyzer.prepare(sampleRate: format.sampleRate, accidentals: accidentals)
+        analyzer.prepare(sampleRate: format.sampleRate, configuration: pipelineConfiguration)
         input.removeTap(onBus: 0)
         input.installTap(onBus: 0, bufferSize: 1_024, format: format, block: analyzer.makeTapBlock())
         tapSampleRate = format.sampleRate
@@ -409,7 +437,7 @@ final class AudioInput: ObservableObject {
             if let voiced = batch.frames.last(where: { $0.isVoiced }) {
                 lastVoiced = voiced
             }
-            let range = PitchGraphScale.range(for: updated, current: graphRange, bounds: Self.displayBounds)
+            let range = PitchGraphScale.range(for: updated, current: graphRange, bounds: displayBounds)
             if range != graphRange {
                 graphRange = range
             }

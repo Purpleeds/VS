@@ -4,11 +4,13 @@ import PitchLaneCore
 
 struct GameRoute: Hashable {
     var songID: String
-    var difficulty: Difficulty
+    var plan: GamePlan
 }
 
 enum Route: Hashable {
     case play, library, tuner, settings, logs, latency
+    case practice, rangeTest, holdDrill, stats
+    case songStats(String)
     case game(GameRoute)
 
     var name: String {
@@ -19,7 +21,12 @@ enum Route: Hashable {
         case .settings: return "settings"
         case .logs: return "logs"
         case .latency: return "latency"
-        case .game(let route): return "game(\(route.songID), \(route.difficulty.rawValue))"
+        case .practice: return "practice"
+        case .rangeTest: return "rangeTest"
+        case .holdDrill: return "holdDrill"
+        case .stats: return "stats"
+        case .songStats(let id): return "songStats(\(id))"
+        case .game(let route): return "game(\(route.songID), \(route.plan.difficulty.rawValue), shift \(route.plan.transpose), practice \(route.plan.practice.isPractice))"
         }
     }
 }
@@ -44,10 +51,14 @@ struct HomeView: View {
                                 .font(.subheadline)
                                 .foregroundStyle(Theme.textSecondary)
                         }
+                        RangeCard { path.append(.rangeTest) }
+                            .frame(maxWidth: 360)
                         VStack(spacing: 12) {
                             menuButton("Play", symbol: "play.fill", route: .play, prominent: true)
                             menuButton("Library", symbol: "books.vertical", route: .library)
                             menuButton("Tuner", symbol: "tuningfork", route: .tuner)
+                            menuButton("Practice", symbol: "figure.mind.and.body", route: .practice)
+                            menuButton("Stats", symbol: "chart.line.uptrend.xyaxis", route: .stats)
                             menuButton("Settings", symbol: "gearshape", route: .settings)
                         }
                         .frame(maxWidth: 360)
@@ -72,6 +83,11 @@ struct HomeView: View {
                 case .library: LibraryView(title: "Library", onPlay: play)
                 case .game(let route): GameScreen(route: route)
                 case .latency: CalibrationView()
+                case .practice: PracticeHubView()
+                case .rangeTest: RangeTestView()
+                case .holdDrill: HoldDrillView()
+                case .stats: StatsView()
+                case .songStats(let id): SongStatsView(songID: id)
                 case .tuner: TunerView()
                 case .settings: SettingsView()
                 case .logs: LogsView()
@@ -85,10 +101,10 @@ struct HomeView: View {
     }
 
     /// Starts a game once the song sheet has finished dismissing.
-    private func play(_ song: Song, _ difficulty: Difficulty) {
+    private func play(_ song: Song, _ plan: GamePlan) {
         Task { @MainActor in
             try? await Task.sleep(for: .milliseconds(350))
-            path.append(.game(GameRoute(songID: song.id, difficulty: difficulty)))
+            path.append(.game(GameRoute(songID: song.id, plan: plan)))
         }
     }
 

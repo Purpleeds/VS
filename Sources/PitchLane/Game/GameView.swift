@@ -39,6 +39,9 @@ struct GameView: View {
             } else {
                 lane
                 GameHUD(session: session) { session.pause(reason: "pause button") }
+                if settings.settings.showFPS {
+                    FPSBadge()
+                }
                 if showRouteWarning, let warning = routeWarning {
                     RouteWarningBanner(text: warning) { showRouteWarning = false }
                 }
@@ -153,6 +156,11 @@ struct GameHUD: View {
                     Text(String(format: "%.0f%%", session.accuracy * 100))
                         .font(.caption.monospacedDigit())
                         .foregroundStyle(Theme.textSecondary)
+                    if session.showsHealth {
+                        EnergyBar(value: session.health)
+                            .frame(width: 96, height: 6)
+                            .padding(.top, 2)
+                    }
                 }
                 Spacer()
                 VStack(spacing: 2) {
@@ -160,6 +168,16 @@ struct GameHUD: View {
                         .font(.caption.weight(.semibold))
                         .foregroundStyle(Theme.textSecondary)
                         .lineLimit(1)
+                    if session.options.practice.isPractice {
+                        Text(practiceLine)
+                            .font(.caption2.weight(.semibold))
+                            .foregroundStyle(Theme.gold)
+                    }
+                    if let last = session.loopPasses.last {
+                        Text("Pass \(session.loopPasses.count + 1) · last \(Int((last * 100).rounded()))%")
+                            .font(.caption.monospacedDigit())
+                            .foregroundStyle(Theme.accent)
+                    }
                     if session.combo > 1 {
                         HStack(spacing: 6) {
                             Text("\(session.combo) combo")
@@ -190,6 +208,54 @@ struct GameHUD: View {
             .padding(.top, 6)
             Spacer()
         }
+    }
+
+    private var practiceLine: String {
+        let practice = session.options.practice
+        var parts = ["PRACTICE"]
+        if practice.speed < 0.999 { parts.append(practice.speedText) }
+        if practice.loop != nil { parts.append("LOOP") }
+        if practice.noFail { parts.append("NO-FAIL") }
+        return parts.joined(separator: " · ")
+    }
+}
+
+struct EnergyBar: View {
+    let value: Double
+
+    var body: some View {
+        GeometryReader { geo in
+            ZStack(alignment: .leading) {
+                Capsule().fill(Theme.surface)
+                Capsule()
+                    .fill(value > 0.5 ? Theme.good : (value > 0.25 ? Theme.warn : Theme.bad))
+                    .frame(width: geo.size.width * CGFloat(max(0, min(1, value))))
+                    .animation(.easeOut(duration: 0.2), value: value)
+            }
+        }
+        .accessibilityLabel("Energy \(Int((value * 100).rounded())) percent")
+    }
+}
+
+/// Frame-rate counter for the game screen (Settings > Show FPS).
+struct FPSBadge: View {
+    @EnvironmentObject private var diagnostics: AudioDiagnostics
+
+    var body: some View {
+        VStack {
+            Spacer()
+            HStack {
+                Spacer()
+                Text(diagnostics.snapshot.gameFPS.map { String(format: "%.0f fps", $0) } ?? "– fps")
+                    .font(.system(size: 11, weight: .semibold, design: .monospaced))
+                    .foregroundStyle(Theme.textSecondary)
+                    .padding(.horizontal, 6)
+                    .padding(.vertical, 2)
+                    .background(Color.black.opacity(0.5), in: Capsule())
+                    .padding(8)
+            }
+        }
+        .allowsHitTesting(false)
     }
 }
 
@@ -347,6 +413,15 @@ struct ResultsView: View {
                             .font(.subheadline.monospacedDigit())
                             .foregroundStyle(Theme.textSecondary)
                     }
+                }
+                if result.failed {
+                    Label("Out of energy: the song ended early", systemImage: "bolt.slash.fill")
+                        .font(.headline)
+                        .foregroundStyle(Theme.bad)
+                } else if session.options.practice.isPractice {
+                    Label("Practice run (not counted for bests)", systemImage: "figure.mind.and.body")
+                        .font(.subheadline)
+                        .foregroundStyle(Theme.gold)
                 }
                 if session.isNewBest {
                     Label("New personal best!", systemImage: "star.fill")

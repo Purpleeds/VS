@@ -30,6 +30,11 @@ public struct HoldDrillResult: Sendable, Equatable {
         public var time: Double
         /// Cents from the reference (target note, or the median of the hold); nil = unvoiced.
         public var cents: Double?
+
+        public init(time: Double, cents: Double?) {
+            self.time = time
+            self.cents = cents
+        }
     }
 
     /// 0...100.

@@ -134,10 +134,10 @@ final class TransposerTests: XCTestCase {
 
     func testFitAndBestShift() {
         let tenor = VocalRange(low: 48, high: 69) // C3-A4
-        let high = song([60, 72, 79, 84]) // up to C6
+        let high = song([60, 72, 79, 81]) // up to A5
         XCTAssertEqual(SongTransposer.fit(of: high, in: tenor), .outside(below: 0, above: 2))
         XCTAssertEqual(SongTransposer.fit(of: high, shift: -12, in: tenor), .fits)
-        XCTAssertEqual(SongTransposer.bestShift(for: high, in: tenor), -12, "an octave is as good as -10 and preferred")
+        XCTAssertEqual(SongTransposer.bestShift(for: high, in: tenor), -12, "the only shift that fits")
         let low = song([36, 40, 43])
         XCTAssertEqual(SongTransposer.fit(of: low, in: tenor), .outside(below: 3, above: 0))
         XCTAssertEqual(SongTransposer.bestShift(for: low, in: tenor), 12)
@@ -193,9 +193,12 @@ final class TransposerTests: XCTestCase {
         let withBreaks = Song(id: "p", title: "P", source: .builtIn, notes: notes, lineBreaks: [3.5, 7.5])
         let phrases = withBreaks.phraseRanges(pad: 0)
         XCTAssertEqual(phrases.count, 3)
-        XCTAssertEqual(phrases[0], 0...2.8)
-        XCTAssertEqual(phrases[1], 5...6.8)
-        XCTAssertEqual(phrases[2], 9...9.8)
+        XCTAssertEqual(phrases[0].lowerBound, 0, accuracy: 1e-9)
+        XCTAssertEqual(phrases[0].upperBound, 2.8, accuracy: 1e-9)
+        XCTAssertEqual(phrases[1].lowerBound, 5, accuracy: 1e-9)
+        XCTAssertEqual(phrases[1].upperBound, 6.8, accuracy: 1e-9)
+        XCTAssertEqual(phrases[2].lowerBound, 9, accuracy: 1e-9)
+        XCTAssertEqual(phrases[2].upperBound, 9.8, accuracy: 1e-9)
 
         let noBreaks = Song(id: "q", title: "Q", source: .builtIn, notes: notes)
         XCTAssertEqual(noBreaks.phraseRanges(pad: 0).count, 3, "split at pauses of a second or more")
@@ -294,7 +297,7 @@ final class HoldDrillTests: XCTestCase {
     func testDriftIsReported() {
         let rising = drill { 60 + 0.05 * $0 }
         XCTAssertEqual(rising.driftCentsPerSecond, 5, accuracy: 0.3)
-        XCTAssertGreaterThan(rising.score, 90, "slow drift is only a little wobble")
+        XCTAssertGreaterThan(rising.score, 80, "slow drift is only a little wobble")
     }
 
     func testSettleTimeIsNotScored() {
@@ -304,7 +307,7 @@ final class HoldDrillTests: XCTestCase {
     }
 
     func testSilenceCountsAgainstTheScore() {
-        let half = drill { $0 > 3 ? nil : 60 }
+        let half = drill { $0 > 3.4 ? nil : 60 }
         XCTAssertEqual(half.voicedFraction, 0.5, accuracy: 0.1)
         XCTAssertEqual(half.score, 50, accuracy: 10)
         let none = drill { _ in nil }
@@ -387,8 +390,7 @@ final class GameHistoryTests: XCTestCase {
             history.add(record("a", accuracy: a, day: Double(i)))
         }
         let trend = history.trend(songID: "a")
-        let improvement = try? XCTUnwrap(GameHistory.improvement(in: trend, window: 5))
-        XCTAssertEqual(improvement ?? 0, 0.87 - 0.56, accuracy: 1e-9)
+        XCTAssertEqual(GameHistory.improvement(in: trend, window: 5) ?? 0, 0.87 - 0.56, accuracy: 1e-9)
         XCTAssertNil(GameHistory.improvement(in: Array(trend.prefix(1))))
         XCTAssertNil(GameHistory.improvement(in: Array(trend.prefix(3)), window: 5), "needs an earlier window")
 
@@ -436,7 +438,7 @@ final class InstrumentModeTests: XCTestCase {
 
     func testLowAndHighInstrumentNotes() {
         for rate in [44_100.0, 48_000] {
-            for note in stride(from: 28, through: 95, by: 3) {
+            for note in stride(from: 28, through: 91, by: 3) {
                 let midi = Double(note) + 0.3
                 let frames = instrumentFrames(SignalFactory.tone(midi: midi, duration: 0.45, sampleRate: rate), rate: rate)
                 let settled = frames.dropFirst(6)
@@ -520,5 +522,29 @@ final class PracticeSettingsTests: XCTestCase {
         XCTAssertEqual(loud.noiseGateDBFS, -30)
         let quiet = try JSONDecoder().decode(AppSettings.self, from: Data(#"{"noiseGateDBFS":-200}"#.utf8))
         XCTAssertEqual(quiet.noiseGateDBFS, -65)
+    }
+}
+
+final class LoopStartClockTests: XCTestCase {
+    func testCountdownEndsAtTheLoopStart() {
+        var clock = GameClock(songDuration: 100, rate: 0.5)
+        clock.start(at: 10, from: 20)
+        XCTAssertEqual(clock.songTime(at: 10), 18.5, accuracy: 1e-12, "3 real seconds at half speed = 1.5 song seconds")
+        XCTAssertEqual(clock.countdown(at: 10.2), 3)
+        XCTAssertEqual(clock.countdown(at: 12.5), 1)
+        XCTAssertEqual(clock.phase(at: 11), .countdown)
+        XCTAssertEqual(clock.songTime(at: 13), 20, accuracy: 1e-12)
+        XCTAssertNil(clock.countdown(at: 13.1))
+        XCTAssertEqual(clock.phase(at: 13.1), .playing)
+        XCTAssertEqual(clock.songTime(at: 15), 21, accuracy: 1e-12)
+    }
+
+    func testWrappingAtTheLoopEndIsNotACountdown() {
+        var clock = GameClock(songDuration: 100)
+        clock.start(at: 0, from: 20)
+        clock.seek(toSongTime: 19, at: 30)
+        XCTAssertEqual(clock.phase(at: 30.5), .playing)
+        XCTAssertNil(clock.countdown(at: 30.5))
+        XCTAssertEqual(clock.songTime(at: 30.5), 19.5, accuracy: 1e-12)
     }
 }

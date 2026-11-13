@@ -23,6 +23,8 @@ public struct GameClock: Sendable, Equatable {
 
     private var anchorHost: Double?
     private var anchorSong = 0.0
+    /// Song time the countdown ends at (0, or the start of a practice loop).
+    private var startSong = 0.0
     /// Mapping in force before the last `seek`, valid for host times before `switchHost`.
     private var previousHost: Double?
     private var previousSong = 0.0
@@ -45,16 +47,18 @@ public struct GameClock: Sendable, Equatable {
         return (isPaused ? .infinity : anchorHost, anchorSong)
     }
 
-    public mutating func start(at host: Double) {
+    /// Starts the countdown; the song position reaches `songStart` when it ends.
+    public mutating func start(at host: Double, from songStart: Double = 0) {
         anchorHost = host
-        anchorSong = -leadIn * rate
+        startSong = songStart
+        anchorSong = songStart - leadIn * rate
         previousHost = nil
         switchHost = -.infinity
         isPaused = false
     }
 
     public func songTime(at host: Double) -> Double {
-        guard let anchorHost else { return -leadIn * rate }
+        guard let anchorHost else { return startSong - leadIn * rate }
         if let previousHost, host < switchHost {
             return previousSong + max(0, host - previousHost) * rate
         }
@@ -103,7 +107,7 @@ public struct GameClock: Sendable, Equatable {
         if isPaused { return .paused }
         let t = songTime(at: host)
         if t >= endTime { return .finished }
-        if t < 0 || (host < anchorHost && previousHost == nil) { return .countdown }
+        if previousHost == nil, t < startSong || host < anchorHost { return .countdown }
         return .playing
     }
 
@@ -114,7 +118,7 @@ public struct GameClock: Sendable, Equatable {
             return max(1, Int((anchorHost - host).rounded(.up)))
         }
         let t = songTime(at: host)
-        return t < 0 ? max(1, Int((-t / rate).rounded(.up))) : nil
+        return previousHost == nil && t < startSong ? max(1, Int(((startSong - t) / rate).rounded(.up))) : nil
     }
 }
 

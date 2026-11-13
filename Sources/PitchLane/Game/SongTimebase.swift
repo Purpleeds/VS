@@ -17,16 +17,20 @@ final class SongTimebase {
     private weak var audio: AudioInput?
     private let songDuration: Double
     private let leadIn: Double
+    let rate: Double
+    /// Output-render time at which the last `seek` takes effect (loops).
+    private var lastSeekRender: Double?
     private var captureOffset: Double?
     private var fallbackMapper = StreamClockMapper()
     /// Last output-render time seen, used when the engine has just stopped (route change, interruption).
     private var lastRender: Double?
 
-    init(audio: AudioInput, songDuration: Double, leadIn: Double = 3) {
+    init(audio: AudioInput, songDuration: Double, leadIn: Double = 3, rate: Double = 1) {
         self.audio = audio
         self.songDuration = songDuration
         self.leadIn = leadIn
-        clock = GameClock(songDuration: songDuration, leadIn: leadIn)
+        self.rate = rate
+        clock = GameClock(songDuration: songDuration, leadIn: leadIn, rate: rate)
     }
 
     var isStarted: Bool { clock.isStarted }
@@ -40,13 +44,37 @@ final class SongTimebase {
 
     /// Starts the countdown. Returns false until the output clock is available.
     @discardableResult
-    func start() -> Bool {
+    func start(from songStart: Double = 0) -> Bool {
         guard let audio, let render = renderNow() else { return false }
         latency = audio.latency
-        clock = GameClock(songDuration: songDuration, leadIn: leadIn)
-        clock.start(at: render + 0.05)
+        clock = GameClock(songDuration: songDuration, leadIn: leadIn, rate: rate)
+        clock.start(at: render + 0.05, from: songStart)
+        lastSeekRender = nil
         publish()
         return true
+    }
+
+    /// True between asking for a seek and it reaching the output (a few ms to a few hundred ms).
+    func isSeekPending() -> Bool {
+        guard let lastSeekRender, let render = renderNow() else { return false }
+        return render < lastSeekRender
+    }
+
+    /// Output-render time at which song time `songTime` is rendered (while running).
+    func renderSeconds(forSongTime songTime: Double) -> Double? {
+        guard let anchor = clock.anchor, anchor.time.isFinite else { return nil }
+        return anchor.time + (songTime - anchor.songTime) / rate
+    }
+
+    /// Jumps to `target` exactly when the audio reaches song time `switchSong` (a loop wrap). Returns the host
+    /// time of the switch so other audio can be scheduled at the same instant.
+    @discardableResult
+    func seek(toSongTime target: Double, whenRenderingSongTime switchSong: Double) -> Double? {
+        guard let switchRender = renderSeconds(forSongTime: switchSong) else { return nil }
+        clock.seek(toSongTime: target, at: switchRender)
+        lastSeekRender = switchRender
+        publish()
+        return audio?.hostSeconds(forRender: switchRender)
     }
 
     /// Freezes at what the player is hearing now.
@@ -71,7 +99,7 @@ final class SongTimebase {
     /// Hands the clock's anchor to the guide voice on the render thread.
     func publish() {
         guard let anchor = clock.anchor else { return }
-        audio?.setGuideTimeline(anchorRender: anchor.time, anchorSong: anchor.songTime)
+        audio?.setGuideTimeline(anchorRender: anchor.time, anchorSong: anchor.songTime, rate: rate)
     }
 
     // MARK: What the player hears
@@ -120,6 +148,7 @@ final class SongTimebase {
         guard let render = audio.renderSeconds(atHost: sungHost) else { return nil }
         let heard = render - latency.output
         guard clock.isAdvancing(at: heard) else { return nil }
+        if let lastSeekRender, heard < lastSeekRender { return nil }
         return clock.songTime(at: heard) - (applyCorrection ? latency.correction : 0)
     }
 
@@ -128,7 +157,7 @@ final class SongTimebase {
     /// Host time at which song time `songTime` is *rendered* (for scheduling players/clicks), while running.
     func hostSeconds(forSongTime songTime: Double) -> Double? {
         guard let anchor = clock.anchor, anchor.time.isFinite else { return nil }
-        return audio?.hostSeconds(forRender: anchor.time + (songTime - anchor.songTime))
+        return audio?.hostSeconds(forRender: anchor.time + (songTime - anchor.songTime) / rate)
     }
 
     /// Song time at which rendering (not hearing) currently is.

@@ -75,6 +75,11 @@ final class BackingTrack {
         if player.engine != nil { player.stop() }
     }
 
+    /// Practice speed (0.5...1); pitch is preserved by the time-pitch unit.
+    func setRate(_ rate: Double) {
+        timePitch.rate = Float(max(0.5, min(2, rate)))
+    }
+
     func setVolume(_ volume: Float) {
         player.volume = max(0, min(1, volume))
     }

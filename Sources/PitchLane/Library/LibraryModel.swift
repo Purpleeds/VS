@@ -218,6 +218,22 @@ final class LibraryModel: ObservableObject {
         }
     }
 
+    /// Removes every imported song (built-ins are untouched). Returns the ids that were removed.
+    @discardableResult
+    func deleteAllImported() -> [String] {
+        let ids = imported.map(\.id)
+        for id in ids {
+            do {
+                try store.delete(id: id)
+            } catch {
+                AppLog.error("Delete failed for \(id): \(error.localizedDescription)", category: "library")
+            }
+        }
+        AppLog.info("Deleted all imported songs (\(ids.count))", category: "library")
+        reload()
+        return ids
+    }
+
     func delete(_ song: Song) {
         guard song.source != .builtIn else { return }
         do {

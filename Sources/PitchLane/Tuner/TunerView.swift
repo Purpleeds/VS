@@ -59,6 +59,7 @@ struct TunerView: View {
             frame: audio.latest,
             lastVoiced: audio.lastVoiced,
             accidentals: settings.settings.accidentals,
+            noiseGateDBFS: settings.settings.noiseGateDBFS,
             compact: compact
         )
     }
@@ -93,6 +94,7 @@ struct TunerReadout: View {
     let frame: PitchFrame?
     let lastVoiced: PitchFrame?
     let accidentals: Accidentals
+    let noiseGateDBFS: Double
     let compact: Bool
 
     private static let stabilizerDefaults = PitchStabilizerConfiguration()
@@ -123,9 +125,9 @@ struct TunerReadout: View {
             MeterBar(
                 title: "Input level",
                 value: levelFraction(frame?.levelDBFS),
-                marker: levelFraction(Self.stabilizerDefaults.noiseGateDBFS),
+                marker: levelFraction(noiseGateDBFS),
                 valueText: frame.map { String(format: "%.0f dBFS", max(Self.meterFloorDB, $0.levelDBFS)) } ?? "–",
-                tint: (frame?.levelDBFS ?? -160) >= Self.stabilizerDefaults.noiseGateDBFS ? Theme.accent : Theme.textSecondary
+                tint: (frame?.levelDBFS ?? -160) >= noiseGateDBFS ? Theme.accent : Theme.textSecondary
             )
             if !voiced, let reason = frame?.unvoicedReason {
                 Text(Self.explain(reason))
@@ -154,7 +156,7 @@ struct TunerReadout: View {
         switch reason {
         case .belowNoiseGate: return "Too quiet"
         case .lowConfidence: return "No clear pitch"
-        case .outOfRange: return "Above the C2–C6 range"
+        case .outOfRange: return "Above the detector range"
         case .pendingJump: return "Checking a big jump…"
         }
     }

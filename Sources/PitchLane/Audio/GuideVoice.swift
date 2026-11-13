@@ -14,6 +14,8 @@ final class GuideVoice: @unchecked Sendable {
     /// (anchor render seconds bits, anchor song time bits). Song time NaN = no song; render +inf = paused.
     private let timeline = Atomic<WordPair>(WordPair(first: 0, second: UInt(Double.nan.bitPattern)))
     private let volumeBits = Atomic<UInt32>(0)
+    /// Song seconds per output second (practice speed); set before the timeline starts.
+    private let rateBits = Atomic<UInt64>(Double(1).bitPattern)
     /// Which renderer slot the audio thread uses: 0, 1, or -1 for none.
     private let activeSlot = Atomic<Int>(-1)
     /// (sample time bits, host time) of the latest render cycle; (0, 0) until the first one.
@@ -44,7 +46,8 @@ final class GuideVoice: @unchecked Sendable {
         activeSlot.store(target, ordering: .releasing)
     }
 
-    func setTimeline(anchorRender: Double, anchorSong: Double) {
+    func setTimeline(anchorRender: Double, anchorSong: Double, rate: Double) {
+        rateBits.store(rate.bitPattern, ordering: .relaxed)
         timeline.store(WordPair(first: UInt(anchorRender.bitPattern), second: UInt(anchorSong.bitPattern)), ordering: .releasing)
     }
 
@@ -99,7 +102,8 @@ final class GuideVoice: @unchecked Sendable {
         if let renderer, !anchorSong.isNaN, stamp.mFlags.contains(.sampleTimeValid) {
             let renderSeconds = stamp.mSampleTime / sampleRate
             let advancing = renderSeconds >= anchorRender
-            let songTime = advancing ? anchorSong + (renderSeconds - anchorRender) : anchorSong
+            let rate = Double(bitPattern: rateBits.load(ordering: .relaxed))
+            let songTime = advancing ? anchorSong + (renderSeconds - anchorRender) * rate : anchorSong
             renderer.render(
                 into: out,
                 frameCount: frames,

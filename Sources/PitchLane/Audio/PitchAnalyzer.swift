@@ -78,26 +78,27 @@ final class PitchAnalyzer: @unchecked Sendable {
         wake.add(data: 1)
     }
 
-    /// Call before installing a tap with a (possibly new) input format.
-    func prepare(sampleRate: Double, accidentals: Accidentals) {
+    /// Call before installing a tap with a (possibly new) input format, or to change detector settings.
+    func prepare(sampleRate: Double, configuration: PitchPipelineConfiguration) {
         queue.async { [self] in
             flushStats()
             ring.discardAll()
             streamBase = ring.consumerCount
             inputRate = sampleRate
-            let configuration = PitchPipelineConfiguration(accidentals: accidentals)
             let pipeline = PitchPipeline(inputSampleRate: sampleRate, configuration: configuration)
             self.pipeline = pipeline
-            self.accidentals = accidentals
+            self.accidentals = configuration.accidentals
             sessionStats = PitchSessionStats()
             statsWindowStart = .now
             framesInWindow = 0
             logTiming = AnalysisTiming()
             droppedAtLastLog = ring.droppedChunks
+            let range = configuration.detector
             AppLog.info(
-                "Analysis ready: input \(Int(sampleRate)) Hz -> \(Int(configuration.detector.sampleRate)) Hz, "
+                "Analysis ready: input \(Int(sampleRate)) Hz -> \(Int(range.sampleRate)) Hz, "
                     + "window \(Self.format(pipeline.windowDuration * 1_000, 1)) ms, hop \(Self.format(configuration.hopDuration * 1_000, 0)) ms, "
-                    + "range C2-C6",
+                    + "range \(Int(range.minFrequency.rounded()))-\(Int(range.maxFrequency.rounded())) Hz, "
+                    + "gate \(Int(configuration.stabilizer.noiseGateDBFS)) dBFS",
                 category: "pitch"
             )
         }

@@ -11,15 +11,20 @@ struct GameScreen: View {
     @Environment(\.dismiss) private var dismiss
 
     var body: some View {
-        if let song = library.song(withID: route.songID) {
-            GameView(song: song, backingURL: library.backingAudioURL(for: song), options: GameOptions(
-                difficulty: route.difficulty,
+        if let base = library.song(withID: route.songID) {
+            let plan = route.plan
+            let song = base.transposed(by: plan.transpose)
+            GameView(song: song, backingURL: library.backingAudioURL(for: base), options: GameOptions(
+                difficulty: plan.difficulty,
                 octaveAgnostic: settings.settings.octaveAgnostic,
                 clickTrack: settings.settings.clickTrack,
                 showNoteNames: settings.settings.showNoteNames,
-                guideTone: settings.settings.guideEnabled(for: route.difficulty),
+                guideTone: settings.settings.guideEnabled(for: plan.difficulty),
                 guideVolume: settings.settings.guideVolume,
-                backingVolume: settings.settings.backingVolume
+                backingVolume: settings.settings.backingVolume,
+                practice: plan.practice,
+                failEnabled: settings.settings.failEnabled,
+                transpose: plan.transpose
             ))
         } else {
             VStack(spacing: 12) {

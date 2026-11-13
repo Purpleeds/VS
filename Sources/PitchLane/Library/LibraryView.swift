@@ -18,8 +18,8 @@ enum LibrarySelection: Identifiable, Hashable {
 
 struct LibraryView: View {
     let title: String
-    /// Called with the song to play and the chosen difficulty (nil = no Play button).
-    var onPlay: ((Song, Difficulty) -> Void)?
+    /// Called with the song to play and the chosen plan (nil = no Play button).
+    var onPlay: ((Song, GamePlan) -> Void)?
 
     @EnvironmentObject private var library: LibraryModel
     @EnvironmentObject private var settings: SettingsModel
@@ -89,11 +89,11 @@ struct LibraryView: View {
         }
     }
 
-    private var playHandler: ((Song, Difficulty) -> Void)? {
+    private var playHandler: ((Song, GamePlan) -> Void)? {
         guard let onPlay else { return nil }
-        return { song, difficulty in
+        return { song, plan in
             selection = nil
-            onPlay(song, difficulty)
+            onPlay(song, plan)
         }
     }
 
@@ -200,13 +200,15 @@ struct SongRow: View {
 
 struct SongDetailSheet: View {
     let selection: LibrarySelection
-    var onPlay: ((Song, Difficulty) -> Void)?
+    var onPlay: ((Song, GamePlan) -> Void)?
 
     @EnvironmentObject private var library: LibraryModel
     @EnvironmentObject private var settings: SettingsModel
     @EnvironmentObject private var scores: ScoreStore
     @Environment(\.dismiss) private var dismiss
     @State private var difficulty: Difficulty = .normal
+    @State private var shift = 0
+    @State private var practice = PracticeOptions.normal
     @State private var showAudioImporter = false
     @State private var confirmDelete = false
 
@@ -238,7 +240,22 @@ struct SongDetailSheet: View {
         .presentationDetents([.medium, .large])
         .onAppear {
             difficulty = settings.settings.lastDifficulty
+            shift = settings.settings.transpose(for: shiftKey)
             AppLog.info("Song details opened: \(selection.id)", category: "library")
+        }
+        .onChange(of: difficulty) { _, _ in
+            practice = PracticeOptions(speed: practice.speed, noFail: practice.noFail)
+        }
+        .onChange(of: shift) { _, newValue in
+            settings.settings.setTranspose(newValue, for: shiftKey)
+        }
+    }
+
+    /// Built-ins keep one shift across their difficulties.
+    private var shiftKey: String {
+        switch selection {
+        case .builtIn(let kind): return "builtin.\(kind.rawValue)"
+        case .imported(let id): return id
         }
     }
 
@@ -284,6 +301,9 @@ struct SongDetailSheet: View {
                 }
             }
             if onPlay != nil {
+                TransposeSection(song: song, shift: $shift)
+                PracticeSection(song: song, practice: $practice)
+                    .id(song.id)
                 Section("Game options") {
                     Toggle("Guide tone (\(difficulty == .hard ? "Hard" : "Easy & Normal"))", isOn: Binding(
                         get: { settings.settings.guideEnabled(for: difficulty) },
@@ -298,9 +318,9 @@ struct SongDetailSheet: View {
                 Section {
                     Button {
                         settings.settings.lastDifficulty = difficulty
-                        onPlay(song, difficulty)
+                        onPlay(song, GamePlan(difficulty: difficulty, transpose: shift, practice: practice))
                     } label: {
-                        Label("Sing \(difficulty.displayName)", systemImage: "play.fill")
+                        Label("\(practice.isPractice ? "Practice" : "Sing") \(difficulty.displayName)", systemImage: "play.fill")
                             .font(.headline)
                             .frame(maxWidth: .infinity)
                     }

@@ -44,6 +44,8 @@ final class PitchAnalyzer: @unchecked Sendable {
     private var droppedAtLastLog = 0
     private var streamBase = 0
     private var inputRate = 48_000.0
+    /// Optional second consumer of the raw mic samples (voice search). Runs on this queue, never on the audio thread.
+    private var sampleSink: (@Sendable (UnsafeBufferPointer<Float>, Double) -> Void)?
 
     init() {
         wake = DispatchSource.makeUserDataAddSource(queue: queue)
@@ -113,6 +115,14 @@ final class PitchAnalyzer: @unchecked Sendable {
         }
     }
 
+    /// Also hands every drained chunk of mic samples (mono, input rate) to `sink`, on the analysis queue.
+    /// nil removes it. The samples are only valid during the call.
+    func setSampleSink(_ sink: (@Sendable (UnsafeBufferPointer<Float>, Double) -> Void)?) {
+        queue.async { [self] in
+            self.sampleSink = sink
+        }
+    }
+
     func setAccidentals(_ accidentals: Accidentals) {
         queue.async { [self] in
             self.accidentals = accidentals
@@ -129,11 +139,14 @@ final class PitchAnalyzer: @unchecked Sendable {
         }
         var frames: [PitchFrame] = []
         var events: [PitchLogEvent] = []
+        let sink = sampleSink
+        let rate = inputRate
         scratch.withUnsafeMutableBufferPointer { buffer in
             guard let base = buffer.baseAddress else { return }
             while true {
                 let n = ring.read(into: base, maxCount: buffer.count)
                 if n == 0 { break }
+                sink?(UnsafeBufferPointer(start: base, count: n), rate)
                 pipeline.process(UnsafeBufferPointer(start: base, count: n)) { frame in
                     frames.append(frame)
                     events.append(contentsOf: sessionStats.add(frame))

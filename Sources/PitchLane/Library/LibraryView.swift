@@ -31,6 +31,8 @@ struct LibraryView: View {
     @State private var pendingDelete: Song?
     @State private var showPhotos = false
     @State private var photosItem: PhotosPickerItem?
+    @State private var showVoice = false
+    @State private var voiceSelection: LibrarySelection?
 
     static let importTypes: [UTType] = {
         var types: [UTType] = [.plainText, .midi, .mp3, .mpeg4Audio, .wav, .aiff, .audio] + VideoTools.contentTypes
@@ -60,6 +62,9 @@ struct LibraryView: View {
         .searchable(text: $query, prompt: "Search songs")
         .toolbar {
             ToolbarItem(placement: .topBarTrailing) {
+                Button("Search by Voice", systemImage: "mic") { showVoice = true }
+            }
+            ToolbarItem(placement: .topBarTrailing) {
                 Menu {
                     Button("Song or Video from Files…", systemImage: "folder") { showImporter = true }
                     Button("Video from Photos…", systemImage: "photo.on.rectangle") { showPhotos = true }
@@ -73,6 +78,16 @@ struct LibraryView: View {
             guard let item else { return }
             photosItem = nil
             Task { await loadPhotosVideo(item) { library.makeSong(fromPhotosVideo: $0) } }
+        }
+        .sheet(isPresented: $showVoice, onDismiss: {
+            if let found = voiceSelection {
+                voiceSelection = nil
+                selection = found
+            }
+        }) {
+            VoiceSearchSheet(prompt: "Say a song name", hints: voiceCandidates.map(\.title)) { spoken in
+                handleVoice(spoken)
+            }
         }
         .safeAreaInset(edge: .bottom) {
             if let job = library.transcription {
@@ -121,6 +136,26 @@ struct LibraryView: View {
             }
         } message: { _ in
             Text("The song, its backing audio, scores and history are removed from this phone.")
+        }
+    }
+
+    private var voiceCandidates: [VoiceQuery.Candidate] {
+        BuiltInKind.allCases.map { VoiceQuery.Candidate(id: "builtin:\($0.rawValue)", title: $0.title) }
+            + library.imported.map { VoiceQuery.Candidate(id: $0.id, title: $0.title, artist: $0.artist) }
+    }
+
+    /// Spoken words: fill the search field, and open the song when one clearly matches.
+    private func handleVoice(_ spoken: String) {
+        query = spoken
+        guard let match = VoiceQuery.bestMatch(for: spoken, in: voiceCandidates) else {
+            AppLog.info("Voice search: no single match, showing search results", category: "voice")
+            return
+        }
+        AppLog.info("Voice search: opened a song (score \(String(format: "%.2f", match.score)))", category: "voice")
+        if match.id.hasPrefix("builtin:"), let kind = BuiltInKind(rawValue: String(match.id.dropFirst("builtin:".count))) {
+            voiceSelection = .builtIn(kind)
+        } else {
+            voiceSelection = .imported(match.id)
         }
     }
 
@@ -244,6 +279,8 @@ struct SongDetailSheet: View {
     @State private var showAudioImporter = false
     @State private var showPhotos = false
     @State private var photosItem: PhotosPickerItem?
+    @State private var showLyrics = false
+    @State private var pickedLyrics: LyricsCandidate?
     @State private var confirmDelete = false
     @StateObject private var preview = TransposePreview()
 
@@ -348,6 +385,9 @@ struct SongDetailSheet: View {
                 if song.source != .builtIn {
                     LabeledContent("Backing audio", value: song.backingAudioFile == nil ? "None" : "Attached")
                     LabeledContent("Video", value: song.videoFile == nil ? "None" : (settings.settings.showVideo ? "Plays behind the lane" : "Attached (hidden in Settings)"))
+                    if let credit = song.lyricsCredit {
+                        LabeledContent("Lyrics", value: credit)
+                    }
                 }
             }
             if onPlay != nil {
@@ -386,6 +426,7 @@ struct SongDetailSheet: View {
                 Section {
                     Button("Attach Audio or Video from Files…", systemImage: "music.note") { showAudioImporter = true }
                     Button("Attach Video from Photos…", systemImage: "photo.on.rectangle") { showPhotos = true }
+                    Button("Find Lyrics Online…", systemImage: "text.quote") { showLyrics = true }
                     Button("Delete Song", systemImage: "trash", role: .destructive) { confirmDelete = true }
                 }
             }
@@ -395,6 +436,14 @@ struct SongDetailSheet: View {
             guard let item else { return }
             photosItem = nil
             Task { await loadPhotosVideo(item) { library.attachVideo($0.url, to: song, owned: true) } }
+        }
+        .sheet(isPresented: $showLyrics, onDismiss: {
+            if let candidate = pickedLyrics {
+                pickedLyrics = nil
+                library.applyLyrics(candidate, to: song)
+            }
+        }) {
+            LyricsSearchSheet(song: song, backingURL: library.backingAudioURL(for: song)) { pickedLyrics = $0 }
         }
         .fileImporter(isPresented: $showAudioImporter, allowedContentTypes: [.mp3, .mpeg4Audio, .wav, .aiff, .audio] + VideoTools.contentTypes) { result in
             if case .success(let url) = result {

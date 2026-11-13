@@ -137,6 +137,11 @@ final class AudioInput: ObservableObject {
         frameListeners[name] = handler
     }
 
+    /// Voice search: also feed the raw mic samples to `sink` (on the analysis queue). nil removes it.
+    func setSampleSink(_ sink: (@Sendable (UnsafeBufferPointer<Float>, Double) -> Void)?) {
+        analyzer.setSampleSink(sink)
+    }
+
     func addEngineStopListener(_ name: String, _ handler: @escaping () -> Void) {
         engineStopListeners[name] = handler
     }

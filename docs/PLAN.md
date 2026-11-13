@@ -251,3 +251,21 @@ os_log mirror private, local-only clipboard, Privacy section in Settings.
 Import a video from Photos (progress card, new song "From video", plays with its video); attach a video to an
 UltraStar song (video behind the lane, its sound as backing, in sync after pause/resume and with a practice loop);
 turn videos off in Settings; a game at 120 fps with sparks, bursts, combo flash; results confetti.
+
+## 8. Voice search + lyrics by song name (done)
+
+- **Voice search** (Library toolbar mic, and the mic in Find Lyrics): Apple speech recognition with
+  `requiresOnDeviceRecognition` only (refuses rather than sending audio to a server when the language has no
+  on-device model). Mic samples come from `PitchAnalyzer`'s drain queue via `AudioInput.setSampleSink` (the audio-thread
+  tap is unchanged). Stops after ~1.4 s of silence. Core `VoiceQuery` strips "play/sing/please…" and fuzzy-matches the
+  library (accents, one-letter mishearings); a clear match opens the song, otherwise the words fill the search field.
+- **Find Lyrics Online** (song sheet, imported songs): search LRCLIB (`lrclib.net/api/search?q=`, free/open, synced LRC);
+  Genius has no lyrics API. Core `LRCParser` (time tags, offset, enhanced word times), `LyricsSearch` (URL, lenient
+  decode, synced-first ranking by duration), `LyricAligner` (line words onto the notes that start in the line; word times
+  win; automatic offset −12…12 s for videos with a different intro; plain lyrics spread over phrases). Credit stored in
+  `Song.lyricsCredit`. Only the typed/spoken song name is sent; this is the app's only network request.
+
+### Phone checklist
+Library mic: say "play Major Scale" (opens it), say a nonsense name (fills search); deny speech permission (message);
+song made from a video: Find Lyrics Online, pick a timed result (words on the notes, line breaks, shift message);
+a words-only result; airplane mode (clear error).

@@ -10,6 +10,8 @@
 	<string>2</string>
 	<key>NSMicrophoneUsageDescription</key>
 	<string>PitchLane listens to your voice to show your pitch. Audio never leaves your phone.</string>
+	<key>NSSpeechRecognitionUsageDescription</key>
+	<string>PitchLane recognises the song name you say, on your phone. Your voice is never sent anywhere.</string>
 	<key>CADisableMinimumFrameDurationOnPhone</key>
 	<true/>
 	<key>UIDeviceFamily</key>

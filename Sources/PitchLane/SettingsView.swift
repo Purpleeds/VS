@@ -129,7 +129,11 @@ struct SettingsView: View {
                       systemImage: "mic.slash")
                 Label("Scores, settings, songs and logs stay on this phone. Logs leave it only if you copy or share them.",
                       systemImage: "lock")
-                Label("The microphone is only on during the tuner, games, practice and calibration; the orange dot shows when.",
+                Label("Voice search is recognised on the phone; your voice is never sent anywhere.",
+                      systemImage: "waveform")
+                Label("Find Lyrics Online sends only the song name you search for to lrclib.net. Nothing else goes online.",
+                      systemImage: "network")
+                Label("The microphone is only on during the tuner, games, practice, calibration and voice search; the orange dot shows when.",
                       systemImage: "circle.fill")
             } header: {
                 Text("Privacy")

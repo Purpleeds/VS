@@ -247,7 +247,7 @@ final class LibraryModel: ObservableObject {
                     + "\(String(format: "%.1f", Date().timeIntervalSince(started))) s",
                 category: "library"
             )
-            var text = "\(notes.count) notes from the singing (\(summary.rangeText(accidentals: .sharps))). The video plays behind the lane and its sound is the backing track.\n\nTranscriptions are rough, especially with music behind the voice; try it in Practice first."
+            var text = "\(notes.count) notes from the singing (\(summary.rangeText(accidentals: .sharps))). The video plays behind the lane and its sound is the backing track.\n\nAdd the words with Find Lyrics Online in the song's details. Transcriptions are rough, especially with music behind the voice; try it in Practice first."
             if let backingProblem { text += "\n\n" + backingProblem }
             show(Message(title: "Made \"\(song.title)\"", text: text))
         } catch is CancellationError {
@@ -446,6 +446,48 @@ final class LibraryModel: ObservableObject {
         AppLog.info("Deleted all imported songs (\(ids.count))", category: "library")
         reload()
         return ids
+    }
+
+    /// Fits looked-up lyrics onto the song's notes and saves. Returns false (with a message) if nothing fitted.
+    @discardableResult
+    func applyLyrics(_ candidate: LyricsCandidate, to song: Song) -> Bool {
+        let current = imported.first { $0.id == song.id } ?? song
+        let result: LyricAligner.Result
+        if let synced = candidate.syncedLyrics, LRCParser.parse(synced).filter({ !$0.words.isEmpty }).count >= 2 {
+            result = LyricAligner.apply(lines: LRCParser.parse(synced), to: current)
+        } else {
+            result = LyricAligner.applyPlain(candidate.plainLyrics ?? candidate.syncedLyrics ?? "", to: current)
+        }
+        AppLog.info(
+            "Lyrics fitted: \(result.wordsPlaced)/\(result.wordsTotal) words on \(result.notesWithWords)/\(current.notes.count) notes, "
+                + "offset \(String(format: "%+.2f", result.offset)) s, \(candidate.hasSyncedLyrics ? "timed" : "plain")",
+            category: "lyrics"
+        )
+        guard result.wordsPlaced > 0 else {
+            message = Message(title: "The words didn't fit", text: "None of the lyrics lined up with this song's notes. Try another result.")
+            return false
+        }
+        var updated = result.song
+        updated.lyricsCredit = SongLimits.clip("LRCLIB: \(candidate.credit)")
+        do {
+            try store.save(updated)
+            reload()
+            var text = "\(result.wordsPlaced) words placed on \(result.notesWithWords) of \(current.notes.count) notes."
+            if abs(result.offset) >= 0.05 {
+                text += " The lyrics were shifted \(String(format: "%+.1f", result.offset)) s to match your recording."
+            }
+            if !candidate.hasSyncedLyrics {
+                text += " These lyrics have no timing, so lines were spread over the song's phrases."
+            }
+            if result.wordsPlaced < result.wordsTotal {
+                text += " \(result.wordsTotal - result.wordsPlaced) words had no notes to go on."
+            }
+            message = Message(title: "Lyrics added", text: text)
+            return true
+        } catch {
+            message = Message(title: "Couldn't save the lyrics", text: error.localizedDescription)
+            return false
+        }
     }
 
     /// Erase everything: also removes folders that never loaded (corrupt or half-written imports).

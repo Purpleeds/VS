@@ -157,6 +157,8 @@ public struct Song: Codable, Sendable, Equatable, Identifiable {
     /// File name of a video inside the song's folder, shown (muted) behind the lane. Its sound is the backing
     /// audio, so it shares the backing's timeline (`offsetMs` included).
     public var videoFile: String?
+    /// Where the words came from when they were looked up online (e.g. "LRCLIB: Track · Artist").
+    public var lyricsCredit: String?
 
     public init(
         id: String,
@@ -169,7 +171,8 @@ public struct Song: Codable, Sendable, Equatable, Identifiable {
         tempo: [TempoSegment] = [],
         backingAudioFile: String? = nil,
         offsetMs: Double = 0,
-        videoFile: String? = nil
+        videoFile: String? = nil,
+        lyricsCredit: String? = nil
     ) {
         self.schemaVersion = Song.currentSchemaVersion
         self.id = id
@@ -183,10 +186,11 @@ public struct Song: Codable, Sendable, Equatable, Identifiable {
         self.backingAudioFile = backingAudioFile
         self.offsetMs = offsetMs
         self.videoFile = videoFile
+        self.lyricsCredit = lyricsCredit
     }
 
     private enum CodingKeys: String, CodingKey {
-        case schemaVersion, id, title, artist, source, difficulty, notes, lineBreaks, tempo, backingAudioFile, offsetMs, videoFile
+        case schemaVersion, id, title, artist, source, difficulty, notes, lineBreaks, tempo, backingAudioFile, offsetMs, videoFile, lyricsCredit
     }
 
     public init(from decoder: Decoder) throws {
@@ -205,6 +209,7 @@ public struct Song: Codable, Sendable, Equatable, Identifiable {
         let offset = try c.decodeIfPresent(Double.self, forKey: .offsetMs) ?? 0
         offsetMs = offset.isFinite ? max(-60_000, min(60_000, offset)) : 0
         videoFile = c.lenient(String.self, forKey: .videoFile)
+        lyricsCredit = c.lenient(String.self, forKey: .lyricsCredit).map(SongLimits.clip)
         guard notes.count <= SongLimits.maximumNotes * 2 else {
             throw DecodingError.dataCorruptedError(forKey: .notes, in: c, debugDescription: "too many notes (\(notes.count))")
         }

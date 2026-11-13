@@ -49,6 +49,7 @@ xtool dev build --ipa -c release            # what build-ipa.sh runs
 - **Fix ALL errors and ALL warnings.** `build-ipa.sh` fails the build if the log contains any `warning:` or `error:`.
 - Info.plist (`Info.plist`, referenced by `xtool.yml`) must keep:
   `NSMicrophoneUsageDescription` = "PitchLane listens to your voice to show your pitch. Audio never leaves your phone."
+  `NSSpeechRecognitionUsageDescription` = "PitchLane recognises the song name you say, on your phone. Your voice is never sent anywhere."
   and `CADisableMinimumFrameDurationOnPhone` = true (120 Hz).
 
 ## CI (GitHub Actions, `.github/workflows/ci.yml`)
@@ -165,6 +166,16 @@ Runs on every push and PR:
 - `MelodyTranscriber` (Core) turns pitch frames into notes for songs made from a video (`SongSource.video`).
 - Lane effects use Core `ParticleField` (fixed capacity, no per-frame allocation) and `ComboMilestone`; emit from
   `GameSession` (pitch frames / note results), draw in `LaneRenderer`. Gradients and palettes are `static let`.
+
+## Voice search and lyrics (step 8)
+
+- Voice search: `VoiceSearch` (Speech framework) with `requiresOnDeviceRecognition = true`, never server
+  recognition. It gets mic samples through `AudioInput.setSampleSink` on the analysis queue; the tap block stays
+  ring-only. Client name "voice-search"; it always releases on stop/cancel. Never log transcripts (log lengths only).
+- The only network request in the app is `LyricsService.search` (LRCLIB, https, the query text and a generic
+  `PitchLane/<version> (iOS)` User-Agent). Never add other network calls or send audio, songs or logs anywhere.
+- Lyrics logic is Core and tested: `LRCParser`, `LyricsSearch`, `LyricAligner`, `VoiceQuery`. Fetched lyrics are only
+  put on the user's own imported songs, at their request, and stay on the phone; built-ins stay original.
 
 ## Versioning
 

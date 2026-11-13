@@ -19,5 +19,8 @@ enum Theme {
     static let bad = Color(red: 1.00, green: 0.38, blue: 0.38)
     static let gold = Color(red: 1.00, green: 0.82, blue: 0.30)
     static let lane = Color(red: 0.06, green: 0.07, blue: 0.12)
+    /// Top of the lane's background gradient (the bottom is `lane`).
+    static let laneTop = Color(red: 0.10, green: 0.07, blue: 0.20)
+    static let violet = Color(red: 0.62, green: 0.45, blue: 1.00)
 }
 #endif

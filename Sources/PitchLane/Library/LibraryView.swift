@@ -1,4 +1,5 @@
 #if canImport(SwiftUI)
+import PhotosUI
 import SwiftUI
 import UniformTypeIdentifiers
 import PitchLaneCore
@@ -28,9 +29,11 @@ struct LibraryView: View {
     @State private var selection: LibrarySelection?
     @State private var showImporter = false
     @State private var pendingDelete: Song?
+    @State private var showPhotos = false
+    @State private var photosItem: PhotosPickerItem?
 
     static let importTypes: [UTType] = {
-        var types: [UTType] = [.plainText, .midi, .mp3, .mpeg4Audio, .wav, .aiff, .audio]
+        var types: [UTType] = [.plainText, .midi, .mp3, .mpeg4Audio, .wav, .aiff, .audio] + VideoTools.contentTypes
         for ext in ["txt", "mid", "midi", "kar", "m4a"] {
             if let type = UTType(filenameExtension: ext), !types.contains(type) { types.append(type) }
         }
@@ -57,9 +60,29 @@ struct LibraryView: View {
         .searchable(text: $query, prompt: "Search songs")
         .toolbar {
             ToolbarItem(placement: .topBarTrailing) {
-                Button("Import", systemImage: "plus") { showImporter = true }
+                Menu {
+                    Button("Song or Video from Files…", systemImage: "folder") { showImporter = true }
+                    Button("Video from Photos…", systemImage: "photo.on.rectangle") { showPhotos = true }
+                } label: {
+                    Label("Import", systemImage: "plus")
+                }
             }
         }
+        .photosPicker(isPresented: $showPhotos, selection: $photosItem, matching: .videos, preferredItemEncoding: .current)
+        .onChange(of: photosItem) { _, item in
+            guard let item else { return }
+            photosItem = nil
+            Task { await loadPhotosVideo(item) { library.makeSong(fromPhotosVideo: $0) } }
+        }
+        .safeAreaInset(edge: .bottom) {
+            if let job = library.transcription {
+                TranscriptionCard(job: job) { library.cancelTranscription() }
+                    .padding(.horizontal, 16)
+                    .padding(.bottom, 8)
+                    .transition(.move(edge: .bottom).combined(with: .opacity))
+            }
+        }
+        .animation(.snappy, value: library.transcription != nil)
         .fileImporter(isPresented: $showImporter, allowedContentTypes: Self.importTypes, allowsMultipleSelection: true) { result in
             switch result {
             case .success(let urls):
@@ -128,10 +151,10 @@ struct LibraryView: View {
                 } label: {
                     SongRow(
                         title: song.title,
-                        subtitle: [song.artist, song.source == .midi ? "MIDI" : "UltraStar"].filter { !$0.isEmpty }.joined(separator: " · "),
+                        subtitle: [song.artist, song.sourceName].filter { !$0.isEmpty }.joined(separator: " · "),
                         summary: song.summary,
                         accidentals: settings.settings.accidentals,
-                        badge: song.backingAudioFile == nil ? nil : "music.note"
+                        badge: song.videoFile != nil ? "film" : (song.backingAudioFile == nil ? nil : "music.note")
                     )
                 }
             }
@@ -219,6 +242,8 @@ struct SongDetailSheet: View {
     @State private var shift = 0
     @State private var practice = PracticeOptions.normal
     @State private var showAudioImporter = false
+    @State private var showPhotos = false
+    @State private var photosItem: PhotosPickerItem?
     @State private var confirmDelete = false
     @StateObject private var preview = TransposePreview()
 
@@ -322,6 +347,7 @@ struct SongDetailSheet: View {
                 LabeledContent("Golden notes", value: "\(summary.goldenCount)")
                 if song.source != .builtIn {
                     LabeledContent("Backing audio", value: song.backingAudioFile == nil ? "None" : "Attached")
+                    LabeledContent("Video", value: song.videoFile == nil ? "None" : (settings.settings.showVideo ? "Plays behind the lane" : "Attached (hidden in Settings)"))
                 }
             }
             if onPlay != nil {
@@ -335,6 +361,9 @@ struct SongDetailSheet: View {
                     ))
                     Toggle("Any octave counts", isOn: $settings.settings.octaveAgnostic)
                     Toggle("Click track", isOn: $settings.settings.clickTrack)
+                    if song.videoFile != nil {
+                        Toggle("Video behind the lane", isOn: $settings.settings.showVideo)
+                    }
                     Toggle("Note names on notes", isOn: $settings.settings.showNoteNames)
                 }
             }
@@ -355,12 +384,19 @@ struct SongDetailSheet: View {
             }
             if song.source != .builtIn {
                 Section {
-                    Button("Attach Backing Audio…", systemImage: "music.note") { showAudioImporter = true }
+                    Button("Attach Audio or Video from Files…", systemImage: "music.note") { showAudioImporter = true }
+                    Button("Attach Video from Photos…", systemImage: "photo.on.rectangle") { showPhotos = true }
                     Button("Delete Song", systemImage: "trash", role: .destructive) { confirmDelete = true }
                 }
             }
         }
-        .fileImporter(isPresented: $showAudioImporter, allowedContentTypes: [.mp3, .mpeg4Audio, .wav, .aiff, .audio]) { result in
+        .photosPicker(isPresented: $showPhotos, selection: $photosItem, matching: .videos, preferredItemEncoding: .current)
+        .onChange(of: photosItem) { _, item in
+            guard let item else { return }
+            photosItem = nil
+            Task { await loadPhotosVideo(item) { library.attachVideo($0.url, to: song, owned: true) } }
+        }
+        .fileImporter(isPresented: $showAudioImporter, allowedContentTypes: [.mp3, .mpeg4Audio, .wav, .aiff, .audio] + VideoTools.contentTypes) { result in
             if case .success(let url) = result {
                 library.attachBackingAudio(url, to: song)
             }
@@ -448,6 +484,63 @@ struct MIDITrackPicker: View {
             }
         }
         .contentShape(Rectangle())
+    }
+}
+/// Loads a Photos video into the import folder and hands it on; failures go to the library's message.
+@MainActor
+func loadPhotosVideo(_ item: PhotosPickerItem, then use: (PickedMovie) -> Void) async {
+    do {
+        guard let movie = try await item.loadTransferable(type: PickedMovie.self) else {
+            AppLog.warning("Photos video: nothing loaded", category: "library")
+            return
+        }
+        AppLog.info("Photos video loaded (\(movie.url.pathExtension))", category: "library")
+        use(movie)
+    } catch {
+        AppLog.warning("Photos video couldn't be loaded: \(error.localizedDescription)", category: "library")
+    }
+}
+
+/// Progress of turning a video into a song.
+struct TranscriptionCard: View {
+    let job: LibraryModel.Transcription
+    let onCancel: () -> Void
+
+    var body: some View {
+        HStack(spacing: 14) {
+            Image(systemName: "waveform.badge.magnifyingglass")
+                .font(.title2)
+                .foregroundStyle(Theme.accent)
+                .symbolEffect(.pulse)
+            VStack(alignment: .leading, spacing: 6) {
+                Text("Listening to \"\(job.title)\"…")
+                    .font(.subheadline.weight(.semibold))
+                    .foregroundStyle(Theme.textPrimary)
+                    .lineLimit(1)
+                ProgressView(value: job.progress)
+                    .tint(Theme.accent)
+                Text(job.queued > 0 ? "\(Int(job.progress * 100))% · \(job.queued) more queued" : "\(Int(job.progress * 100))% · writing notes from the singing")
+                    .font(.caption)
+                    .foregroundStyle(Theme.textSecondary)
+            }
+            Button("Cancel", role: .cancel, action: onCancel)
+                .buttonStyle(.bordered)
+        }
+        .padding(14)
+        .background(.ultraThinMaterial, in: RoundedRectangle(cornerRadius: 18, style: .continuous))
+        .accessibilityElement(children: .combine)
+    }
+}
+
+extension Song {
+    /// Where the song came from, for list subtitles.
+    var sourceName: String {
+        switch source {
+        case .builtIn: return "Built-in"
+        case .ultraStar: return "UltraStar"
+        case .midi: return "MIDI"
+        case .video: return "From video"
+        }
     }
 }
 #endif

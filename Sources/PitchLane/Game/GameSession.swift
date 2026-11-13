@@ -74,6 +74,13 @@ final class GameSession: ObservableObject {
     private(set) var onPitchNote: (index: Int, time: Double)?
     private(set) var pitchRange: ClosedRange<Double>
     private(set) var replay = ReplayTrace()
+    /// Sparks and bursts on the lane (song-time based, allocation-free).
+    private(set) var particles = ParticleField(capacity: 320)
+    /// A combo milestone to celebrate: (combo, song time reached).
+    private(set) var comboFlash: (combo: Int, time: Double)?
+    /// The multiplier went up: (new multiplier, song time).
+    private(set) var multiplierFlash: (value: Int, time: Double)?
+    private var sparkToggle = false
 
     private var keeper: ScoreKeeper
     /// Notes scored this pass (the loop section, or the whole song) and their indices in `song`.
@@ -253,6 +260,9 @@ final class GameSession: ObservableObject {
         trail = []
         latestVoiced = nil
         latestFrameSongTime = -.infinity
+        particles.reset()
+        comboFlash = nil
+        multiplierFlash = nil
         popups = []
         ratings = [:]
         onPitchNote = nil
@@ -340,6 +350,14 @@ final class GameSession: ObservableObject {
             let finished = keeper.add(time: t, midi: frame.midi)
             if let evaluation = keeper.lastEvaluation, evaluation.time == t {
                 onPitchNote = evaluation.onPitch ? (evaluation.noteIndex, t) : nil
+                // Comet tail while on pitch: a spark every other frame, streaming back along the lane.
+                if evaluation.onPitch, let display {
+                    sparkToggle.toggle()
+                    if sparkToggle {
+                        particles.emit(count: 1, time: t, midi: display, now: t, kind: .spark,
+                                       angle: .pi, spread: 1.4, speed: 70, life: 0.45, size: 2.6)
+                    }
+                }
             }
             if !finished.isEmpty {
                 record(finished)
@@ -357,15 +375,52 @@ final class GameSession: ObservableObject {
     }
 
     private func record(_ finished: [NoteResult]) {
+        let oldCombo = combo
+        let oldMultiplier = multiplier
         for note in finished {
             let full = scoringIndices[note.noteIndex]
             ratings[full] = note.rating
             popups.append(Popup(noteIndex: full, rating: note.rating, points: note.points, songTime: note.endTime))
             healthMeter.apply(note.rating)
+            burst(for: full, rating: note.rating, at: note.endTime)
+        }
+        if let time = finished.last?.endTime {
+            if let milestone = ComboMilestone.crossed(from: oldCombo, to: keeper.combo) {
+                comboFlash = (milestone, time)
+            }
+            if keeper.multiplier > oldMultiplier {
+                multiplierFlash = (keeper.multiplier, time)
+            }
         }
         results = keeper.results
         health = healthMeter.value
         if popups.count > 24 { popups.removeFirst(popups.count - 24) }
+    }
+
+    /// Fireworks where a well-sung note ends: bigger for perfect, gold for golden notes.
+    private func burst(for index: Int, rating: NoteRating, at time: Double) {
+        guard index < song.notes.count else { return }
+        let note = song.notes[index]
+        let midi = Double(note.pitch)
+        switch rating {
+        case .perfect:
+            particles.emit(count: note.isGolden ? 40 : 26, time: note.end, midi: midi, now: time,
+                           kind: note.isGolden ? .golden : .burst, spread: 2 * .pi, speed: 190, life: 0.75, size: 3.4)
+        case .great:
+            particles.emit(count: note.isGolden ? 28 : 16, time: note.end, midi: midi, now: time,
+                           kind: note.isGolden ? .golden : .burst, spread: 2 * .pi, speed: 150, life: 0.6, size: 3)
+        case .good:
+            particles.emit(count: 8, time: note.end, midi: midi, now: time, kind: .burst, spread: .pi, speed: 110, life: 0.5, size: 2.6)
+        case .meh, .miss:
+            break
+        }
+    }
+
+    /// Song clock for the video backdrop: what the player hears now, whether it is moving, and the speed.
+    func videoClock(atHost host: Double) -> (songTime: Double, advancing: Bool, rate: Double)? {
+        guard let timebase, timebase.isStarted else { return nil }
+        let t = timebase.heardSongTime(atHost: host)
+        return (t, phase == .running && timebase.isAdvancing(atHost: host), options.practice.speed)
     }
 
     private func publishScore() {

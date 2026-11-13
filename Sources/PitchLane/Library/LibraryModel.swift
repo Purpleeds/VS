@@ -27,6 +27,17 @@ final class LibraryModel: ObservableObject {
     @Published var message: Message?
     @Published var pendingMIDI: PendingMIDI?
 
+    /// A video being turned into a song (notes transcribed from its singing).
+    struct Transcription: Equatable {
+        var title: String
+        var progress: Double
+        var queued: Int
+    }
+
+    @Published private(set) var transcription: Transcription?
+    private var transcriptionQueue: [(url: URL, title: String)] = []
+    private var transcriptionTask: Task<Void, Never>?
+
     let builtIns = BuiltInSongs.all
     private let store = SongLibraryStore(root: AppPaths.songsDirectory)
     private var midiQueue: [PendingMIDI] = []
@@ -63,12 +74,17 @@ final class LibraryModel: ObservableObject {
         song.source == .builtIn ? nil : store.backingAudioURL(for: song)
     }
 
+    func videoURL(for song: Song) -> URL? {
+        song.source == .builtIn ? nil : store.videoURL(for: song)
+    }
+
     // MARK: Import
 
     func importFiles(_ urls: [URL]) {
         AppLog.info("Import started: \(urls.count) file(s): \(urls.map(\.lastPathComponent).joined(separator: ", "))", category: "library")
         var songFiles: [(name: String, data: Data)] = []
         var audioFiles: [(name: String, url: URL)] = []
+        var videoCopies: Set<URL> = []
         var problems: [String] = []
 
         for url in urls {
@@ -90,23 +106,32 @@ final class LibraryModel: ObservableObject {
                         continue
                     }
                     songFiles.append((name, data))
-                } else if Self.audioExtensions.contains(ext) {
+                } else if Self.audioExtensions.contains(ext) || VideoTools.extensions.contains(ext) {
                     try FileManager.default.createDirectory(at: Self.importTempDirectory, withIntermediateDirectories: true)
                     let temp = Self.importTempDirectory
                         .appendingPathComponent(UUID().uuidString)
                         .appendingPathExtension(ext)
                     try FileManager.default.copyItem(at: url, to: temp)
                     audioFiles.append((name, temp))
+                    if VideoTools.extensions.contains(ext) { videoCopies.insert(temp) }
                 } else {
-                    problems.append("\(name): not a supported file (use .txt, .mid, .midi, .mp3, .m4a or .wav)")
+                    problems.append("\(name): not a supported file (use .txt, .mid, .midi, .mp3, .m4a, .wav or a video)")
                 }
             } catch {
                 problems.append("\(name): couldn't be read (\(error.localizedDescription))")
             }
         }
 
-        if songFiles.isEmpty, !audioFiles.isEmpty {
-            problems.append("Audio files need a song: pick them together with a .txt or MIDI file, or use Attach Backing Audio in a song's details.")
+        // Videos picked without a song file become new songs, transcribed from their singing.
+        var transcribing: Set<URL> = []
+        if songFiles.isEmpty {
+            for file in audioFiles where videoCopies.contains(file.url) {
+                transcribing.insert(file.url)
+                transcriptionQueue.append((file.url, URL(fileURLWithPath: file.name).deletingPathExtension().lastPathComponent))
+            }
+            if audioFiles.contains(where: { !videoCopies.contains($0.url) }) {
+                problems.append("Audio files need a song: pick them together with a .txt or MIDI file, or use Attach Backing Audio in a song's details.")
+            }
         }
 
         var importedTitles: [String] = []
@@ -146,13 +171,135 @@ final class LibraryModel: ObservableObject {
 
         // Temp audio copies are only kept while a queued MIDI import still needs them.
         let stillNeeded = Set(midiQueue.compactMap(\.audio) + [pendingMIDI?.audio].compactMap { $0 })
-        for file in audioFiles where !stillNeeded.contains(file.url) {
+        for file in audioFiles where !stillNeeded.contains(file.url) && !transcribing.contains(file.url) {
             try? FileManager.default.removeItem(at: file.url)
         }
 
         reload()
         report(imported: importedTitles, problems: problems)
         presentNextMIDI()
+        runNextTranscription()
+    }
+
+    // MARK: Video
+
+    /// A video from Photos (already copied to the import folder): make a new song from its singing.
+    func makeSong(fromPhotosVideo movie: PickedMovie) {
+        let formatter = DateFormatter()
+        formatter.dateFormat = "d MMM HH:mm"
+        transcriptionQueue.append((movie.url, "Video \(formatter.string(from: Date()))"))
+        AppLog.info("Video from Photos queued for transcription", category: "library")
+        runNextTranscription()
+    }
+
+    func cancelTranscription() {
+        guard let task = transcriptionTask else { return }
+        AppLog.info("Transcription cancelled by the user (\(transcriptionQueue.count) more queued, dropped)", category: "library")
+        for job in transcriptionQueue { try? FileManager.default.removeItem(at: job.url) }
+        transcriptionQueue.removeAll()
+        task.cancel()
+    }
+
+    private func runNextTranscription() {
+        guard transcriptionTask == nil, !transcriptionQueue.isEmpty else { return }
+        let job = transcriptionQueue.removeFirst()
+        transcription = Transcription(title: job.title, progress: 0, queued: transcriptionQueue.count)
+        transcriptionTask = Task { [weak self] in
+            await self?.transcribe(job)
+            guard let self else { return }
+            self.transcriptionTask = nil
+            self.transcription = nil
+            self.runNextTranscription()
+        }
+    }
+
+    private func transcribe(_ job: (url: URL, title: String)) async {
+        defer { try? FileManager.default.removeItem(at: job.url) }
+        let started = Date()
+        AppLog.info("Transcribing a video (\(job.url.pathExtension))", category: "library")
+        do {
+            let notes = try await VideoTools.transcribe(job.url) { [weak self] fraction in
+                Task { @MainActor in self?.transcription?.progress = fraction }
+            }
+            try Task.checkCancellation()
+            guard notes.count >= 3 else {
+                AppLog.warning("Transcription found \(notes.count) notes", category: "library")
+                show(Message(
+                    title: "No singing found",
+                    text: "PitchLane couldn't hear a clear sung melody in \"\(job.title)\". Videos of one voice (with little music behind it) work best."
+                ))
+                return
+            }
+            let song = Song(
+                id: UUID().uuidString,
+                title: SongLimits.clip(job.title),
+                source: .video,
+                notes: notes,
+                lineBreaks: MelodyTranscriber.lineBreaks(for: notes)
+            )
+            try store.save(song)
+            let withVideo = try store.attachVideo(from: job.url, to: song)
+            let backingProblem = await extractBacking(for: withVideo)
+            reload()
+            let summary = withVideo.summary
+            AppLog.info(
+                "Made \"\(song.title)\" from a video: \(notes.count) notes, \(summary.durationText), range \(summary.rangeText(accidentals: .sharps)), "
+                    + "\(String(format: "%.1f", Date().timeIntervalSince(started))) s",
+                category: "library"
+            )
+            var text = "\(notes.count) notes from the singing (\(summary.rangeText(accidentals: .sharps))). The video plays behind the lane and its sound is the backing track.\n\nTranscriptions are rough, especially with music behind the voice; try it in Practice first."
+            if let backingProblem { text += "\n\n" + backingProblem }
+            show(Message(title: "Made \"\(song.title)\"", text: text))
+        } catch is CancellationError {
+            AppLog.info("Transcription cancelled", category: "library")
+        } catch {
+            AppLog.warning("Transcription failed: \(error.localizedDescription)", category: "library")
+            show(Message(title: "Couldn't make a song from the video", text: error.localizedDescription))
+        }
+    }
+
+    /// Puts the song's video soundtrack in as its backing audio. Returns a problem to show, if any.
+    private func extractBacking(for song: Song) async -> String? {
+        guard let video = store.videoURL(for: song) else { return nil }
+        try? FileManager.default.createDirectory(at: Self.importTempDirectory, withIntermediateDirectories: true)
+        let temp = Self.importTempDirectory.appendingPathComponent(UUID().uuidString).appendingPathExtension("m4a")
+        defer { try? FileManager.default.removeItem(at: temp) }
+        do {
+            try await VideoTools.extractAudio(from: video, to: temp)
+            let latest = store.loadAll().songs.first { $0.id == song.id } ?? song
+            let updated = try store.attachBackingAudio(from: temp, to: latest)
+            AppLog.info("Video sound attached as backing for \"\(song.title)\" (\(updated.backingAudioFile ?? "?"))", category: "library")
+            return nil
+        } catch {
+            AppLog.warning("Video sound couldn't become backing audio: \(error.localizedDescription)", category: "library")
+            return "The video's sound couldn't be used as backing audio (\(error.localizedDescription))."
+        }
+    }
+
+    /// Attaches a video (and its sound as backing audio) to an existing song. `url` is a file this app may read
+    /// (a Files pick under security scope, or a Photos copy in the import folder, deleted afterwards if `owned`).
+    func attachVideo(_ url: URL, to song: Song, owned: Bool) {
+        let access = url.startAccessingSecurityScopedResource()
+        defer {
+            if access { url.stopAccessingSecurityScopedResource() }
+            if owned { try? FileManager.default.removeItem(at: url) }
+        }
+        do {
+            let updated = try store.attachVideo(from: url, to: song)
+            AppLog.info("Attached video to \"\(song.title)\" as \(updated.videoFile ?? "?")", category: "library")
+            reload()
+            Task {
+                let problem = await extractBacking(for: updated)
+                reload()
+                message = Message(
+                    title: "Video added",
+                    text: problem ?? "It plays behind the lane, and its sound is now this song's backing audio."
+                )
+            }
+        } catch {
+            AppLog.warning("Attach video failed: \(error.localizedDescription)", category: "library")
+            message = Message(title: "Couldn't add the video", text: error.localizedDescription)
+        }
     }
 
     /// Shows the message now, or after the MIDI pickers if one is up or queued.
@@ -223,7 +370,19 @@ final class LibraryModel: ObservableObject {
         try store.save(song, originalFileName: fileName, originalData: data)
         var saved = song
         var problems: [String] = []
-        if let audio {
+        if let audio, VideoTools.isVideo(audio) {
+            do {
+                saved = try store.attachVideo(from: audio, to: song)
+                let withVideo = saved
+                Task {
+                    if let problem = await extractBacking(for: withVideo) { show(Message(title: "Backing audio", text: "\(fileName): \(problem)")) }
+                    reload()
+                }
+            } catch {
+                AppLog.warning("Video for \(fileName) couldn't be attached: \(error.localizedDescription)", category: "library")
+                problems.append("\(fileName): imported, but the video couldn't be added (\(error.localizedDescription)).")
+            }
+        } else if let audio {
             do {
                 saved = try store.attachBackingAudio(from: audio, to: song)
             } catch {
@@ -256,6 +415,10 @@ final class LibraryModel: ObservableObject {
     // MARK: Edit
 
     func attachBackingAudio(_ url: URL, to song: Song) {
+        if VideoTools.isVideo(url) {
+            attachVideo(url, to: song, owned: false)
+            return
+        }
         let access = url.startAccessingSecurityScopedResource()
         defer { if access { url.stopAccessingSecurityScopedResource() } }
         do {

@@ -30,6 +30,8 @@ public enum SongSource: String, Codable, Sendable {
     case builtIn
     case ultraStar
     case midi
+    /// Notes transcribed from the singing in an imported video.
+    case video
 }
 
 /// Bounds every song must stay inside (importers and `song.json` decoding enforce them), so nothing downstream
@@ -152,6 +154,9 @@ public struct Song: Codable, Sendable, Equatable, Identifiable {
     public var backingAudioFile: String?
     /// Shifts the notes against the backing audio (positive = notes later).
     public var offsetMs: Double
+    /// File name of a video inside the song's folder, shown (muted) behind the lane. Its sound is the backing
+    /// audio, so it shares the backing's timeline (`offsetMs` included).
+    public var videoFile: String?
 
     public init(
         id: String,
@@ -163,7 +168,8 @@ public struct Song: Codable, Sendable, Equatable, Identifiable {
         lineBreaks: [Double] = [],
         tempo: [TempoSegment] = [],
         backingAudioFile: String? = nil,
-        offsetMs: Double = 0
+        offsetMs: Double = 0,
+        videoFile: String? = nil
     ) {
         self.schemaVersion = Song.currentSchemaVersion
         self.id = id
@@ -176,10 +182,11 @@ public struct Song: Codable, Sendable, Equatable, Identifiable {
         self.tempo = tempo.sorted { $0.start < $1.start }
         self.backingAudioFile = backingAudioFile
         self.offsetMs = offsetMs
+        self.videoFile = videoFile
     }
 
     private enum CodingKeys: String, CodingKey {
-        case schemaVersion, id, title, artist, source, difficulty, notes, lineBreaks, tempo, backingAudioFile, offsetMs
+        case schemaVersion, id, title, artist, source, difficulty, notes, lineBreaks, tempo, backingAudioFile, offsetMs, videoFile
     }
 
     public init(from decoder: Decoder) throws {
@@ -197,6 +204,7 @@ public struct Song: Codable, Sendable, Equatable, Identifiable {
         backingAudioFile = try c.decodeIfPresent(String.self, forKey: .backingAudioFile)
         let offset = try c.decodeIfPresent(Double.self, forKey: .offsetMs) ?? 0
         offsetMs = offset.isFinite ? max(-60_000, min(60_000, offset)) : 0
+        videoFile = c.lenient(String.self, forKey: .videoFile)
         guard notes.count <= SongLimits.maximumNotes * 2 else {
             throw DecodingError.dataCorruptedError(forKey: .notes, in: c, debugDescription: "too many notes (\(notes.count))")
         }

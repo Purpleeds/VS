@@ -221,3 +221,33 @@ os_log mirror private, local-only clipboard, Privacy section in Settings.
   "Backing scheduled" against what you hear).
 - Loop wrap: ~100 ms of guide/backing silence and an unscored tail on each pass.
 - Lane text rendering per frame (watch the FPS badge on lyric-dense songs); 120 Hz from `TimelineView(.animation)`.
+
+## 7. Videos + flashier game screen (done)
+
+### Videos (Photos and Files)
+- Library **+** menu: "Song or Video from Files…" (now accepts .mov/.mp4/.m4v) and "Video from Photos…"
+  (`PhotosPicker`, no photo-library permission needed). Song sheet: "Attach Audio or Video from Files…" and
+  "Attach Video from Photos…".
+- **Backing audio:** a video attached to a song (or picked with a .txt/MIDI of the same name) is stored as
+  `video.<ext>` and its soundtrack is exported to AAC as `backing.m4a` (`VideoTools.extractAudio`).
+- **Video behind the lane:** `Song.videoFile`; `VideoBackdrop` plays it muted under a dark veil and keeps it on the
+  song clock with Core `VideoSyncPolicy` (hold during countdown/pause, seek on > 250 ms drift, ±6 % rate nudge
+  above 35 ms). Setting: "Song videos behind the lane" (`AppSettings.showVideo`, default on).
+- **Notes from vocals:** a video picked on its own becomes a new song (`SongSource.video`): its audio is decoded
+  (`AVAssetReader`, 48 kHz mono float) through `PitchPipeline` into Core `MelodyTranscriber` (median-tracked
+  notes, gap bridging, 4-frame confirmed pitch changes, 0.1 s minimum, same-pitch merge, line breaks at 1.2 s
+  silences). Progress card with Cancel. Rough on full mixes; best with one voice.
+
+### Flashier game screen
+- Gradient lane (or the dimmed video), scrolling beat lines, a hit-zone column that brightens with the multiplier.
+- Glowing notes with a glossy highlight; the active note pulses, its lyric turns gold.
+- Core `ParticleField` (fixed pool, allocation-free, positions from birth): a comet tail of sparks while on pitch,
+  bursts on Great/Perfect, golden showers on golden notes, confetti on the results screen.
+- Comet-tail cursor with a pulsing ring when on pitch; pop-ups with points; "25 COMBO!" and "×3" flashes
+  (`ComboMilestone`); popping countdown; HUD combo with flame and bouncing multiplier badge.
+- Results: grade spins in with a glow, the score counts up, confetti for S/A or a new best.
+
+### Phone checklist
+Import a video from Photos (progress card, new song "From video", plays with its video); attach a video to an
+UltraStar song (video behind the lane, its sound as backing, in sync after pause/resume and with a practice loop);
+turn videos off in Settings; a game at 120 fps with sparks, bursts, combo flash; results confetti.

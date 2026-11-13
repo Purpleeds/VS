@@ -65,6 +65,7 @@ struct SettingsView: View {
                 Toggle("Any octave counts", isOn: $model.settings.octaveAgnostic)
                 Toggle("Songs can be failed", isOn: $model.settings.failEnabled)
                 Toggle("Click track", isOn: $model.settings.clickTrack)
+                Toggle("Song videos behind the lane", isOn: $model.settings.showVideo)
             } header: {
                 Text("Play")
             } footer: {

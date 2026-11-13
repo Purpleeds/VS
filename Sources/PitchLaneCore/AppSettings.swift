@@ -30,6 +30,8 @@ public struct AppSettings: Codable, Equatable, Sendable {
     public var showFPS: Bool
     /// Songs end when the energy bar empties (off = never fail).
     public var failEnabled: Bool
+    /// Songs with a video show it (dimmed) behind the lane.
+    public var showVideo: Bool
     /// Guide tone on for Easy/Normal (default on) and Hard (default off).
     public var guideOnEasyNormal: Bool
     public var guideOnHard: Bool
@@ -50,7 +52,8 @@ public struct AppSettings: Codable, Equatable, Sendable {
         noiseGateDBFS: Double = -50,
         instrumentMode: Bool = false,
         showFPS: Bool = false,
-        failEnabled: Bool = true
+        failEnabled: Bool = true,
+        showVideo: Bool = true
     ) {
         self.debugOverlay = debugOverlay
         self.accidentals = accidentals
@@ -68,6 +71,7 @@ public struct AppSettings: Codable, Equatable, Sendable {
         self.instrumentMode = instrumentMode
         self.showFPS = showFPS
         self.failEnabled = failEnabled
+        self.showVideo = showVideo
     }
 
     public static let noiseGateRange: ClosedRange<Double> = -65 ... -30
@@ -108,6 +112,7 @@ public struct AppSettings: Codable, Equatable, Sendable {
         case instrumentMode
         case showFPS
         case failEnabled
+        case showVideo
     }
 
     public init(from decoder: Decoder) throws {
@@ -129,5 +134,6 @@ public struct AppSettings: Codable, Equatable, Sendable {
         self.instrumentMode = container.lenient(Bool.self, forKey: .instrumentMode) ?? false
         self.showFPS = container.lenient(Bool.self, forKey: .showFPS) ?? false
         self.failEnabled = container.lenient(Bool.self, forKey: .failEnabled) ?? true
+        self.showVideo = container.lenient(Bool.self, forKey: .showVideo) ?? true
     }
 }

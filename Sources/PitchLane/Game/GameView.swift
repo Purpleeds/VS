@@ -7,6 +7,7 @@ import PitchLaneCore
 struct GameView: View {
     let song: Song
     let backingURL: URL?
+    let videoURL: URL?
     let options: GameOptions
 
     @StateObject private var session: GameSession
@@ -18,9 +19,10 @@ struct GameView: View {
     @State private var started = false
     @State private var showRouteWarning = true
 
-    init(song: Song, backingURL: URL?, options: GameOptions) {
+    init(song: Song, backingURL: URL?, videoURL: URL? = nil, options: GameOptions) {
         self.song = song
         self.backingURL = backingURL
+        self.videoURL = videoURL
         self.options = options
         _session = StateObject(wrappedValue: GameSession(song: song, options: options))
     }
@@ -43,6 +45,9 @@ struct GameView: View {
             } else if case .failed(let message) = audio.state {
                 AudioFailedView(message: message, retry: { Task { await audio.retry() } }, onBack: { dismiss() })
             } else {
+                if let videoURL {
+                    VideoBackdrop(url: videoURL, session: session)
+                }
                 lane
                 GameHUD(session: session) { session.pause(reason: "pause button") }
                 if settings.settings.showFPS {
@@ -146,7 +151,8 @@ struct GameView: View {
                         songTime: t,
                         host: host,
                         accidentals: settings.settings.accidentals,
-                        showNoteNames: options.showNoteNames
+                        showNoteNames: options.showNoteNames,
+                        videoBehind: videoURL != nil
                     )
                 }
             }
@@ -200,18 +206,33 @@ struct GameHUD: View {
                     }
                     if session.combo > 1 {
                         HStack(spacing: 6) {
-                            Text("\(session.combo) combo")
-                                .font(.headline.monospacedDigit())
+                            Image(systemName: "flame.fill")
+                                .foregroundStyle(session.combo >= 25 ? Theme.gold : Theme.accentSecondary)
+                                .symbolEffect(.bounce, value: session.combo / 10)
+                            Text("\(session.combo)")
+                                .font(.title3.weight(.heavy).monospacedDigit())
                                 .foregroundStyle(Theme.textPrimary)
+                                .contentTransition(.numericText(value: Double(session.combo)))
+                                .animation(.snappy, value: session.combo)
+                            Text("combo")
+                                .font(.caption.weight(.semibold))
+                                .foregroundStyle(Theme.textSecondary)
                             if session.multiplier > 1 {
                                 Text("×\(session.multiplier)")
                                     .font(.headline.weight(.heavy))
                                     .foregroundStyle(Theme.lane)
-                                    .padding(.horizontal, 6)
+                                    .padding(.horizontal, 7)
                                     .background(Theme.gold, in: Capsule())
+                                    .id(session.multiplier)
+                                    .transition(.scale(scale: 1.8).combined(with: .opacity))
                             }
                         }
-                        .transition(.opacity)
+                        .padding(.horizontal, 10)
+                        .padding(.vertical, 4)
+                        .background(.ultraThinMaterial, in: Capsule())
+                        .animation(.spring(response: 0.35, dampingFraction: 0.5), value: session.multiplier)
+                        .transition(.scale.combined(with: .opacity))
+                        .accessibilityElement(children: .combine)
                     }
                 }
                 Spacer()
@@ -420,6 +441,11 @@ struct ResultsView: View {
     let onAgain: () -> Void
     let onDone: () -> Void
     @ScaledMetric(relativeTo: .largeTitle) private var gradeSize: CGFloat = 72
+    @State private var revealed = false
+    @State private var shownScore = 0
+
+    /// Confetti for a great run.
+    private var celebrates: Bool { !result.failed && (result.grade == .s || result.grade == .a || session.isNewBest) }
 
     var body: some View {
         HStack(spacing: 20) {
@@ -430,11 +456,17 @@ struct ResultsView: View {
                     Text(result.grade.rawValue)
                         .font(.system(size: gradeSize, weight: .black, design: .rounded))
                         .foregroundStyle(gradeColor)
+                        .shadow(color: gradeColor.opacity(0.6), radius: revealed ? 18 : 0)
+                        .scaleEffect(revealed ? 1 : 0.2)
+                        .rotationEffect(.degrees(revealed ? 0 : -25))
+                        .opacity(revealed ? 1 : 0)
                     VStack(alignment: .leading, spacing: 2) {
-                        Text("\(result.score)")
+                        Text("\(shownScore)")
                             .font(.system(size: 34, weight: .heavy, design: .rounded))
                             .monospacedDigit()
                             .foregroundStyle(Theme.textPrimary)
+                            .contentTransition(.numericText(value: Double(shownScore)))
+                            .accessibilityLabel("Score \(result.score)")
                         Text("\(String(format: "%.1f", result.accuracy * 100))% accuracy · combo \(result.maxCombo)")
                             .font(.subheadline.monospacedDigit())
                             .foregroundStyle(Theme.textSecondary)
@@ -491,6 +523,13 @@ struct ResultsView: View {
             ReplayGraph(session: session, accidentals: accidentals)
         }
         .padding(20)
+        .overlay {
+            if celebrates { ConfettiView().allowsHitTesting(false).ignoresSafeArea() }
+        }
+        .onAppear {
+            withAnimation(.spring(response: 0.55, dampingFraction: 0.55).delay(0.1)) { revealed = true }
+            withAnimation(.easeOut(duration: 1.2).delay(0.25)) { shownScore = result.score }
+        }
     }
 
     private var gradeColor: Color {
@@ -567,6 +606,51 @@ struct ReplayGraph: View {
             lastTime = point.time
         }
         context.stroke(sung, with: .color(Theme.accentSecondary), style: StrokeStyle(lineWidth: 1.5, lineCap: .round, lineJoin: .round))
+    }
+}
+/// A few seconds of confetti falling across the results screen (Core `ParticleField`, drawn in one Canvas).
+struct ConfettiView: View {
+    @State private var start = CACurrentMediaTime()
+    @State private var done = false
+    @State private var field: ParticleField = {
+        var field = ParticleField(capacity: 160, gravity: 170, seed: 42)
+        for column in 0..<16 {
+            field.emit(count: 10, time: Double(column) / 15, midi: 0, now: Double(column % 4) * 0.12, kind: .confetti,
+                       angle: .pi / 2, spread: 1.6, speed: 90, life: 3.2, size: 4)
+        }
+        return field
+    }()
+
+    private static let colors = [Theme.accent, Theme.accentSecondary, Theme.gold, Theme.good, Theme.violet]
+
+    var body: some View {
+        let field = self.field
+        let start = self.start
+        let colors = Self.colors
+        Group {
+            if !done {
+                TimelineView(.animation(minimumInterval: 1.0 / 60)) { _ in
+                    Canvas { context, size in
+                        let now = CACurrentMediaTime() - start
+                        field.forEachLive(at: now) { particle, age, remaining in
+                            let offset = field.offset(of: particle, age: age)
+                            let x = CGFloat(particle.originTime) * size.width + CGFloat(offset.dx)
+                            let y = -12 + CGFloat(offset.dy)
+                            let spin = CGFloat(sin(age * 9 + particle.hue * 6))
+                            let w = CGFloat(particle.size) * 1.6
+                            let h = CGFloat(particle.size) * max(0.3, abs(spin))
+                            let color = colors[min(colors.count - 1, Int(particle.hue * Double(colors.count)))]
+                            context.fill(Path(CGRect(x: x - w / 2, y: y - h / 2, width: w, height: h)), with: .color(color.opacity(min(1, remaining * 2))))
+                        }
+                    }
+                }
+            }
+        }
+        .task {
+            try? await Task.sleep(for: .seconds(4))
+            done = true
+        }
+        .accessibilityHidden(true)
     }
 }
 #endif

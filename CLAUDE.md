@@ -156,6 +156,16 @@ Runs on every push and PR:
 - os_log mirror is `.private`; the log file leaves the phone only via Copy All (local-only, expires) or Share.
   Erase everything also clears the logs; Logs has Clear.
 
+## Videos and effects (step 7)
+
+- Videos: `Song.videoFile` (`video.<ext>` in the song folder), its soundtrack exported to `backing.m4a`
+  (`VideoTools`). Video frames are never analysed or uploaded; only audio is decoded, on device, for transcription.
+- The video plays muted behind the lane (`VideoBackdrop`); all timing decisions come from Core `VideoSyncPolicy`
+  using the backing's mapping (`songTime - offsetMs`). Never let the video drive the clock.
+- `MelodyTranscriber` (Core) turns pitch frames into notes for songs made from a video (`SongSource.video`).
+- Lane effects use Core `ParticleField` (fixed capacity, no per-frame allocation) and `ComboMilestone`; emit from
+  `GameSession` (pitch frames / note results), draw in `LaneRenderer`. Gradients and palettes are `static let`.
+
 ## Versioning
 
 - `CFBundleShortVersionString` = marketing version; `CFBundleVersion` = integer build number.

@@ -112,6 +112,41 @@ public struct SongLibraryStore: Sendable {
         return updated
     }
 
+    public func videoURL(for song: Song) -> URL? {
+        song.videoFile.map { folder(for: song.id).appendingPathComponent($0) }
+    }
+
+    /// Copies a video into the song's folder as `video.<ext>` (replacing any previous one) and saves.
+    /// Same safety as backing audio: the old file and `song.json` stay untouched if the copy fails.
+    @discardableResult
+    public func attachVideo(from source: URL, to song: Song) throws -> Song {
+        let fileManager = FileManager.default
+        let folder = folder(for: song.id)
+        try fileManager.createDirectory(at: folder, withIntermediateDirectories: true)
+        let ext = source.pathExtension.lowercased()
+        let name = "video.\(ext.isEmpty || !Self.isSafeFolderName(ext) ? "mov" : ext)"
+        let destination = folder.appendingPathComponent(name)
+        let staging = folder.appendingPathComponent("video.incoming-\(UUID().uuidString)")
+        try fileManager.copyItem(at: source, to: staging)
+        do {
+            if fileManager.fileExists(atPath: destination.path) {
+                _ = try fileManager.replaceItemAt(destination, withItemAt: staging)
+            } else {
+                try fileManager.moveItem(at: staging, to: destination)
+            }
+        } catch {
+            try? fileManager.removeItem(at: staging)
+            throw error
+        }
+        var updated = song
+        updated.videoFile = name
+        try save(updated)
+        if let old = videoURL(for: song), old.lastPathComponent != name, fileManager.fileExists(atPath: old.path) {
+            try? fileManager.removeItem(at: old)
+        }
+        return updated
+    }
+
     public func delete(id: String) throws {
         let folder = folder(for: id)
         if FileManager.default.fileExists(atPath: folder.path) {

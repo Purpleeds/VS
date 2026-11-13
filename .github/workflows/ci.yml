@@ -1,7 +1,7 @@
 name: CI
 
-# Verification only. The installable IPA is still built locally in WSL with
-# scripts/build-ipa.sh (xtool needs the Darwin SDK, which can't be fetched in CI).
+# Verification only (every push). The installable IPA comes from the manual "Build IPA" workflow
+# (.github/workflows/ipa.yml) or locally in WSL with scripts/build-ipa.sh.
 on:
   push:
   pull_request:

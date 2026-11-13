@@ -58,8 +58,12 @@ Runs on every push and PR:
 - **iOS compile check (macOS runner):** SwiftPM build for `arm64-apple-ios26.0` (what xtool does) plus an unsigned
   generic-device `xcodebuild`; any Swift warning fails the job. This runner is the only place Xcode tools are used;
   it is a compile check, not part of the user's workflow.
-- CI cannot produce the installable IPA (xtool needs the Darwin SDK and an Apple ID). The IPA is always built
-  locally in WSL with `scripts/build-ipa.sh`.
+- **Build IPA (`.github/workflows/ipa.yml`, manual: Actions > Build IPA > Run workflow):** Linux `swift test`, then on
+  macOS a SwiftPM release build for iOS, links the app target into `PitchLane.app`, adds the bundle keys xtool would add
+  (bundle ID is a workflow input, default `dev.pitchlane.PitchLane`; never in code), zips an unsigned
+  `PitchLane.ipa` and uploads it as the run's artifact. iloader signs it on import. It bumps `CFBundleVersion` and
+  commits "Build N (CI)" back to the branch, so pull before building locally.
+- The IPA can also be built locally in WSL with `scripts/build-ipa.sh` (xtool, copies to the Desktop).
 - In a cloud session without a Swift toolchain, push and read the CI logs instead of guessing whether code compiles.
 
 ## Audio and pitch (step 1)

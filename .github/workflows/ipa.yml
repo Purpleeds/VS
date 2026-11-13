@@ -1,0 +1,166 @@
+name: Build IPA
+
+# Builds an installable (unsigned) release IPA on a macOS runner, the same way xtool does:
+# SwiftPM release build for arm64-apple-ios26.0, link the app target into an executable, wrap it in
+# PitchLane.app with Info.plist, zip as Payload/PitchLane.ipa. iloader (Import IPA) signs it with your
+# Apple ID when installing.
+#
+# Every run bumps CFBundleVersion, and on success commits the bumped Info.plist back to the branch
+# ("Build N (CI)"), so build numbers stay unique between CI and local scripts/build-ipa.sh builds.
+# Pull before building locally.
+#
+# Run it from GitHub: Actions > Build IPA > Run workflow. Download the IPA from the run's Artifacts.
+on:
+  workflow_dispatch:
+    inputs:
+      bundle_id:
+        description: "Bundle ID written into the IPA (iloader re-signs it for your Apple ID)"
+        required: false
+        default: "dev.pitchlane.PitchLane"
+
+permissions:
+  contents: write
+
+concurrency:
+  group: ipa-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  tests:
+    name: Core tests (Linux)
+    runs-on: ubuntu-24.04
+    container: swift:6.2-noble
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v5
+      - name: swift test (release, warnings are errors)
+        shell: bash
+        run: |
+          set -o pipefail
+          swift test -c release -Xswiftc -warnings-as-errors 2>&1 | tee test.log || {
+            echo "=== FAILURE SUMMARY ==="; grep -E "error:|' failed \(" test.log | sort -u | tail -80; exit 1; }
+
+  ipa:
+    name: Release IPA
+    needs: tests
+    runs-on: macos-26
+    timeout-minutes: 30
+    env:
+      BUNDLE_ID: ${{ inputs.bundle_id || 'dev.pitchlane.PitchLane' }}
+    steps:
+      - uses: actions/checkout@v5
+
+      - name: Select newest Xcode 26+
+        run: |
+          XCODE=$(ls -d /Applications/Xcode_2[6-9]*.app 2>/dev/null | tail -1 || true)
+          if [ -n "$XCODE" ]; then sudo xcode-select -s "$XCODE"; fi
+          xcodebuild -version
+          echo "SDK=$(xcrun --sdk iphoneos --show-sdk-path)" >> "$GITHUB_ENV"
+          echo "SDK_VERSION=$(xcrun --sdk iphoneos --show-sdk-version)" >> "$GITHUB_ENV"
+
+      - name: Bump build number
+        run: |
+          current=$(/usr/libexec/PlistBuddy -c "Print :CFBundleVersion" Info.plist)
+          next=$((current + 1))
+          # Edit the text in place (keeps the file's formatting, like scripts/bump-build.sh).
+          perl -0pi -e "s|(<key>CFBundleVersion</key>\s*<string>)\d+(</string>)|\${1}${next}\${2}|" Info.plist
+          test "$(/usr/libexec/PlistBuddy -c "Print :CFBundleVersion" Info.plist)" = "$next"
+          echo "BUILD=$next" >> "$GITHUB_ENV"
+          echo "VERSION=$(/usr/libexec/PlistBuddy -c "Print :CFBundleShortVersionString" Info.plist)" >> "$GITHUB_ENV"
+          echo "Building $(/usr/libexec/PlistBuddy -c "Print :CFBundleShortVersionString" Info.plist) ($next)"
+
+      - name: SwiftPM release build for iOS (warnings are errors)
+        run: |
+          set -o pipefail
+          swift build -c release \
+            --triple arm64-apple-ios26.0 \
+            --sdk "$SDK" \
+            -Xswiftc -warnings-as-errors 2>&1 | tee build.log
+          if grep -hE '(^|[^a-z])warning:' build.log; then
+            echo "::error::Build produced warnings (see above)"; exit 1
+          fi
+
+      - name: Link the app executable
+        run: |
+          set -euo pipefail
+          BIN="$(swift build -c release --triple arm64-apple-ios26.0 --sdk "$SDK" --show-bin-path)"
+          echo "Bin path: $BIN"
+          OBJS=$(find "$BIN/PitchLane.build" "$BIN/PitchLaneCore.build" -name '*.o' | sort)
+          test -n "$OBJS"
+          APP="out/PitchLane.app"
+          rm -rf out && mkdir -p "$APP"
+          # Frameworks (SwiftUI, AVFoundation, ...) come in through the objects' autolink entries.
+          # shellcheck disable=SC2086
+          xcrun --sdk iphoneos swiftc \
+            -target arm64-apple-ios26.0 -sdk "$SDK" \
+            $OBJS \
+            -Xlinker -rpath -Xlinker @executable_path/Frameworks \
+            -o "$APP/PitchLane"
+          nm -gU "$APP/PitchLane" | grep -q ' _main$' || { echo "::error::no _main in the executable"; exit 1; }
+          otool -L "$APP/PitchLane"
+
+      - name: Info.plist
+        run: |
+          set -euo pipefail
+          P="out/PitchLane.app/Info.plist"
+          cp Info.plist "$P"
+          pb() { /usr/libexec/PlistBuddy -c "$1" "$P"; }
+          setkey() { pb "Delete :$1" 2>/dev/null || true; pb "Add :$1 $2 $3"; }
+          setkey CFBundleExecutable string PitchLane
+          setkey CFBundleIdentifier string "$BUNDLE_ID"
+          setkey CFBundleName string PitchLane
+          setkey CFBundlePackageType string APPL
+          setkey CFBundleInfoDictionaryVersion string 6.0
+          setkey CFBundleDevelopmentRegion string en
+          setkey MinimumOSVersion string 26.0
+          setkey LSRequiresIPhoneOS bool true
+          setkey DTPlatformName string iphoneos
+          setkey DTSDKName string "iphoneos$SDK_VERSION"
+          pb "Delete :CFBundleSupportedPlatforms" 2>/dev/null || true
+          pb "Add :CFBundleSupportedPlatforms array"
+          pb "Add :CFBundleSupportedPlatforms:0 string iPhoneOS"
+          pb "Delete :UIRequiredDeviceCapabilities" 2>/dev/null || true
+          pb "Add :UIRequiredDeviceCapabilities array"
+          pb "Add :UIRequiredDeviceCapabilities:0 string arm64"
+          plutil -lint "$P"
+          # Keys the app depends on must survive.
+          test "$(pb 'Print :CADisableMinimumFrameDurationOnPhone')" = "true"
+          pb "Print :NSMicrophoneUsageDescription"
+          printf 'APPL????' > out/PitchLane.app/PkgInfo
+
+      - name: Package IPA
+        run: |
+          set -euo pipefail
+          cd out
+          mkdir Payload
+          cp -R PitchLane.app Payload/
+          ditto -c -k --sequesterRsrc --keepParent Payload PitchLane.ipa
+          unzip -l PitchLane.ipa
+          echo "IPA_NAME=PitchLane-${VERSION}-build${BUILD}" >> "$GITHUB_ENV"
+
+      - name: Upload IPA
+        uses: actions/upload-artifact@v5
+        with:
+          name: ${{ env.IPA_NAME }}
+          path: out/PitchLane.ipa
+          if-no-files-found: error
+
+      - name: Commit the bumped build number
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add Info.plist
+          git commit -m "Build ${BUILD} (CI)"
+          pushed=no
+          for attempt in 1 2 3 4; do
+            if git pull --rebase origin "${GITHUB_REF_NAME}" && git push origin "HEAD:${GITHUB_REF_NAME}"; then
+              pushed=yes; break
+            fi
+            sleep $((attempt * 5))
+          done
+          if [ "$pushed" != yes ]; then
+            echo "::error::IPA built, but the build-number commit couldn't be pushed; bump Info.plist to ${BUILD} by hand"
+            exit 1
+          fi
+          echo "### PitchLane ${VERSION} build ${BUILD}" >> "$GITHUB_STEP_SUMMARY"
+          echo "Download **${IPA_NAME}** from the Artifacts below, unzip it, and import PitchLane.ipa in iloader." >> "$GITHUB_STEP_SUMMARY"

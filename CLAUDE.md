@@ -121,6 +121,20 @@ Runs on every push and PR:
   over by an atomic slot flip; `GuideToneRenderer.render` never allocates/locks/logs.
 - Speaker route: warn that guide/backing leak into the mic. Bluetooth: warn about delay, suggest calibrating.
 
+## Practice, range and stats (step 5)
+
+- Home menu now: Play, Library, Tuner, **Practice** (range test, hold drill), **Stats**, Settings, plus the vocal-range
+  card. A song's sheet holds Key (transpose + preview) and Practice (speed / loop / no-fail).
+- Practice speed lives in `GameClock.rate` and `PracticeOptions`; never rescale song data. Loops use
+  `GameClock.seek` (earlier host times keep the old mapping, so the display that lags the audio doesn't skip) and
+  `SongTimebase.seek(toSongTime:whenRenderingSongTime:)`; frames sung before the seek belong to the previous pass.
+- Practice runs (speed < 100%, loop, no-fail) and failed runs never set personal bests; they are recorded in
+  `history.json` (`GameHistory`, via `ScoreStore.record`).
+- The energy bar (`HealthMeter`) is Core and tested; fail can be disabled in Settings.
+- Detection settings (instrument mode, noise gate) flow from `AppSettings.pipelineConfiguration()` through
+  `AudioInput.setDetection`; graphs use `AudioInput.displayBounds`.
+- Reset data goes through confirmation dialogs in Settings only.
+
 ## Versioning
 
 - `CFBundleShortVersionString` = marketing version; `CFBundleVersion` = integer build number.

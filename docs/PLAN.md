@@ -163,14 +163,38 @@ personal best persist; click track in time.
 Speaker, wired headphones, Bluetooth earbuds: calibrate each, play a song with guide tone (and one with backing
 audio), check notes, guide and backing stay together over a whole song, pause/resume re-syncs, route warnings.
 
-## 5. Range test + practice + settings
+## 5. Range test + practice + settings (done)
 
-Goal: make it playable for any voice and easy to practise.
+### Design
+- **Range test.** `RangeTestFlow` (Core): "sing your lowest comfortable note" -> hold 1 s (`NoteHoldDetector`: run
+  within 0.7 semitone, short dropouts bridged) -> stop singing 0.6 s -> highest note -> saved as `VocalRange` in
+  settings and shown on the home screen. The high note must be at least 5 semitones above the low one.
+- **Auto-transpose.** `SongTransposer`: fit check, best shift in +/-24 semitones (fewest notes outside the range,
+  then smallest move, whole octaves preferred on ties), `Song.transposed(by:)`. The song sheet has a Key section:
+  range readout, "Fit to my range", octave/semitone steps, audio preview (guide tone on the first notes). The shift is
+  remembered per song and applied at play time. Scoring is octave-agnostic by default, so a shift changes the lane
+  and the guide tone, not what counts as correct.
+- **Practice.** `PracticeOptions`: speed 50-100% (`GameClock.rate`: the guide renders at that rate, the backing goes
+  through the time-pitch unit, clicks and lane follow the clock), loop a section (phrase pickers; `GameClock.seek`
+  wraps exactly when the audio reaches the loop end; each pass is scored on its own and shown as "Pass N"),
+  no-fail. Practice runs are saved to history but never count toward personal bests.
+- **Fail / no-fail.** New `HealthMeter` energy bar: Perfect/Great/Good top it up, Meh/Miss drain it; at zero the
+  song ends ("out of energy"). Settings > "Songs can be failed" turns it off globally; practice no-fail and loops
+  never fail.
+- **Hold drill.** `HoldDrill` (Core): one long note (a set note or any note, 5-15 s). The first 0.8 s isn't scored;
+  steadiness = 100 at <= 3 cents RMS wobble falling to 0 at 35 cents, times the voiced fraction; also reports max swing,
+  drift (cents/s) and the centre vs the target.
+- **Instrument mode.** `PitchDetectorConfiguration.instrument` (40 Hz-2 kHz, 50 ms window) selected in Settings;
+  detector range and graphs follow.
+- **Stats.** `GameHistory` (JSON, newest 1000 runs): per-song history, accuracy trend (full-speed completed runs),
+  moving average and improvement vs the previous five runs; drawn with a Canvas chart.
+- **Settings.** Difficulty, octave-agnostic, failing, click track, note names + sharps/flats, labels on notes,
+  guide/backing volume, noise gate (dBFS), instrument mode, latency, show FPS, debug overlay, and Reset data
+  (settings / range / scores / latency / imported songs / everything, each confirmed).
 
-- Range test: find lowest/highest comfortable notes, store in settings, auto-transpose songs into range.
-- Practice mode: loop a section, slow down, hide/show guide, per-note feedback.
-- Settings: difficulty/tolerance, calibration, guide tone, haptics, debug overlay, log access; persisted JSON.
-- Phone checklist: range result sensible, transposed song is singable, loop/slowdown work, settings persist.
+### Phone checklist
+Range test (sing low, high), range card on home, a song outside your range (suggestion + preview), practice at 70%
+with a loop, no-fail, hold drill, instrument mode with your instrument, stats after a few runs, each reset.
 
 ## 6. Final review
 

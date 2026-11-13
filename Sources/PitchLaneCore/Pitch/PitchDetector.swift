@@ -26,9 +26,12 @@ public struct PitchDetectorConfiguration: Sendable, Equatable {
     /// Instruments (trombone, sax, clarinet, ...): about 40 Hz - 2 kHz. Longer analysis window (50 ms).
     public static let instrument = PitchDetectorConfiguration(minFrequency: 40, maxFrequency: 2_000)
 
-    /// MIDI range worth drawing for this configuration (whole notes): voice 36...84, instrument 28...96.
+    /// MIDI range worth drawing for this configuration (whole notes): voice 36...84, instrument 28...95.
     public var displayBounds: ClosedRange<Double> {
-        (PitchMath.midi(fromFrequency: minFrequency).rounded(.down))...(PitchMath.midi(fromFrequency: maxFrequency).rounded(.up))
+        // Whole notes inside the range (a hair of tolerance so C2 = 65.406 Hz counts as 36, not 35.9999).
+        let low = (PitchMath.midi(fromFrequency: minFrequency) - 0.01).rounded(.up)
+        let high = (PitchMath.midi(fromFrequency: maxFrequency) + 0.01).rounded(.down)
+        return low...max(low, high)
     }
 
     /// Shortest period (in samples) inside the range.

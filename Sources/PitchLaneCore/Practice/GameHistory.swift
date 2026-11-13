@@ -109,11 +109,12 @@ public struct GameHistory: Codable, Sendable, Equatable {
         return byID.values.sorted { $0.lastPlayed > $1.lastPlayed }
     }
 
-    /// Accuracy over time for one song (or all), oldest first. By default only full-speed, completed runs.
+    /// Accuracy over time for one song (or all), oldest first. Failed runs are never included; practice runs
+    /// only when asked.
     public func trend(songID: String? = nil, includePractice: Bool = false, limit: Int = 60) -> [TrendPoint] {
         let points = records
             .filter { songID == nil || $0.songID == songID }
-            .filter { includePractice || (!$0.practice && !$0.failed) }
+            .filter { !$0.failed && (includePractice || !$0.practice) }
             .map { TrendPoint(date: $0.date, accuracy: $0.accuracy, record: $0) }
         return Array(points.suffix(limit))
     }

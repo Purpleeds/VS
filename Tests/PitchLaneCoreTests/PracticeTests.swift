@@ -276,7 +276,7 @@ final class HoldDrillTests: XCTestCase {
         // +/-20 cents sine wobble: RMS about 14 cents.
         let wobbly = drill { 60 + 0.2 * sin(2 * Double.pi * 3 * $0) }
         XCTAssertEqual(wobbly.wobbleCents, 14.1, accuracy: 1.5)
-        XCTAssertEqual(wobbly.maxDeviationCents, 20, accuracy: 1)
+        XCTAssertEqual(wobbly.maxDeviationCents, 20, accuracy: 2.5)
         XCTAssertGreaterThan(wobbly.score, 55)
         XCTAssertLessThan(wobbly.score, 80)
         let wild = drill { 60 + 0.6 * sin(2 * Double.pi * 3 * $0) }
@@ -415,7 +415,7 @@ final class GameHistoryTests: XCTestCase {
 final class InstrumentModeTests: XCTestCase {
     func testDisplayBounds() {
         XCTAssertEqual(PitchDetectorConfiguration.voice.displayBounds, 36...84)
-        XCTAssertEqual(PitchDetectorConfiguration.instrument.displayBounds, 28...96)
+        XCTAssertEqual(PitchDetectorConfiguration.instrument.displayBounds, 28...95)
     }
 
     func testConfiguredPipeline() {

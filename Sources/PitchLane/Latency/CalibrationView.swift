@@ -1,6 +1,7 @@
 #if canImport(SwiftUI)
 import QuartzCore
 import SwiftUI
+import UIKit
 import PitchLaneCore
 
 /// Runs one calibration pass: count-in + measured beeps from the guide voice on the output clock, mic levels
@@ -25,7 +26,8 @@ final class CalibrationSession: ObservableObject {
     private var levels: [LatencyCalibrator.Level] = []
     private var finishTask: Task<Void, Never>?
     private weak var audio: AudioInput?
-    private var route: AudioRouteKind = .other
+    /// The route the last run measured; a result is saved for this route, even if the output changed since.
+    private(set) var route: AudioRouteKind = .other
 
     init() {
         beeps = LatencyCalibrator.beepTimes(count: Self.countIn + Self.measured, interval: Self.interval)
@@ -47,6 +49,12 @@ final class CalibrationSession: ObservableObject {
         audio.addFrameListener("calibration") { [weak self] batch, arrival in
             self?.receive(batch, arrival: arrival)
         }
+        // A restart mid-run changes the clock and route: the measurement would be meaningless.
+        audio.addEngineStopListener("calibration") { [weak self] in
+            guard self?.state == .running else { return }
+            AppLog.warning("Calibration cancelled: audio engine stopped", category: "latency")
+            self?.cancel()
+        }
         state = .running
         AppLog.info("Calibration started on \(route.rawValue): \(Self.countIn) count-in + \(Self.measured) beeps every \(Self.interval) s", category: "latency")
         finishTask?.cancel()
@@ -65,6 +73,12 @@ final class CalibrationSession: ObservableObject {
         finishTask?.cancel()
         tearDown()
         if state == .running { state = .idle }
+    }
+
+    /// Back to the start button (after saving a result).
+    func reset() {
+        cancel()
+        state = .idle
     }
 
     /// Song time the player hears now (for the beat indicator).
@@ -106,6 +120,7 @@ final class CalibrationSession: ObservableObject {
 
     private func tearDown() {
         audio?.removeFrameListener("calibration")
+        audio?.removeEngineStopListener("calibration")
         timebase?.stop()
         audio?.installGuide(nil)
     }
@@ -114,7 +129,10 @@ final class CalibrationSession: ObservableObject {
 struct CalibrationView: View {
     @EnvironmentObject private var audio: AudioInput
     @EnvironmentObject private var latency: LatencyStore
+    @Environment(\.openURL) private var openURL
     @StateObject private var session = CalibrationSession()
+    @State private var savedRoute: AudioRouteKind?
+    @State private var starting = false
 
     var body: some View {
         let route = audio.routeKind
@@ -146,12 +164,17 @@ struct CalibrationView: View {
                     .frame(height: 44)
                 switch session.state {
                 case .idle:
+                    if let savedRoute {
+                        Label("Saved for \(savedRoute.displayName)", systemImage: "checkmark.circle.fill")
+                            .foregroundStyle(Theme.good)
+                    }
+                    micStatus
                     Button("Start calibration", systemImage: "metronome") { begin() }
-                        .disabled(audio.state != .running)
+                        .disabled(starting || audio.state == .permissionDenied)
                 case .running:
                     Button("Cancel", role: .cancel) { session.cancel() }
                 case .finished(let result):
-                    resultView(result, route: route)
+                    resultView(result, route: session.route)
                 }
             } header: {
                 Text("Calibrate")
@@ -167,7 +190,10 @@ struct CalibrationView: View {
         .background(Theme.background.ignoresSafeArea())
         .navigationTitle("Latency")
         .navigationBarTitleDisplayMode(.inline)
-        .task { await audio.acquire("calibration") }
+        // The microphone is on only while a calibration runs, not while this screen is just open.
+        .onChange(of: session.state) { _, state in
+            if state != .running { audio.release("calibration") }
+        }
         .onDisappear {
             session.cancel()
             audio.release("calibration")
@@ -191,7 +217,8 @@ struct CalibrationView: View {
             }
             Button("Save for \(route.displayName)", systemImage: "checkmark") {
                 latency.setCalibration(result.offsetMs, for: route)
-                session.cancel()
+                savedRoute = route
+                session.reset()
             }
             .disabled(!result.isReliable)
         } else {
@@ -202,8 +229,49 @@ struct CalibrationView: View {
         Button("Try again", systemImage: "arrow.counterclockwise") { begin() }
     }
 
+    @ViewBuilder
+    private var micStatus: some View {
+        switch audio.state {
+        case .permissionDenied:
+            VStack(alignment: .leading, spacing: 6) {
+                Text("Microphone access is off, so PitchLane can't hear the beeps. Turn on Microphone for PitchLane in Settings.")
+                    .font(.footnote)
+                    .foregroundStyle(Theme.warn)
+                Button("Open Settings", systemImage: "gearshape") {
+                    if let url = URL(string: UIApplication.openSettingsURLString) { openURL(url) }
+                }
+            }
+        case .failed(let message):
+            Text("The microphone couldn't start: \(message). Tap Start to try again.")
+                .font(.footnote)
+                .foregroundStyle(Theme.warn)
+        default:
+            EmptyView()
+        }
+    }
+
     private func begin() {
-        session.start(audio: audio)
+        savedRoute = nil
+        starting = true
+        Task {
+            defer { starting = false }
+            if case .failed = audio.state {
+                await audio.acquire("calibration")
+                await audio.retry()
+            } else {
+                await audio.acquire("calibration")
+            }
+            // Wait briefly for the engine (first start, or right after a route change).
+            for _ in 0..<50 where audio.state != .running {
+                try? await Task.sleep(for: .milliseconds(20))
+            }
+            guard audio.state == .running else {
+                AppLog.warning("Calibration couldn't start: audio \(audio.state)", category: "latency")
+                audio.release("calibration")
+                return
+            }
+            session.start(audio: audio)
+        }
     }
 
     private func routeAdvice(_ route: AudioRouteKind) -> String {

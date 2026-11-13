@@ -16,8 +16,15 @@ public struct SongLibraryStore: Sendable {
         self.root = root
     }
 
+    /// The song's folder. An id that isn't a plain folder name (e.g. from a hand-edited `song.json`) maps to a
+    /// harmless name, so it can never point outside `root`.
     public func folder(for id: String) -> URL {
-        root.appendingPathComponent(id, isDirectory: true)
+        root.appendingPathComponent(Self.isSafeFolderName(id) ? id : "invalid-id", isDirectory: true)
+    }
+
+    public static func isSafeFolderName(_ name: String) -> Bool {
+        !name.isEmpty && name != "." && name != ".." && !name.contains("/") && !name.contains("\\")
+            && !name.hasPrefix(".") && name.utf8.count <= 128
     }
 
     public func backingAudioURL(for song: Song) -> URL? {
@@ -36,7 +43,9 @@ public struct SongLibraryStore: Sendable {
             let url = folder(for: name).appendingPathComponent(Self.songFileName)
             guard fileManager.fileExists(atPath: url.path) else { continue }
             do {
-                if let song = try JSONFileStore<Song>(url: url).load() {
+                if var song = try JSONFileStore<Song>(url: url).load() {
+                    // The folder is the identity: never trust an id edited into song.json.
+                    song.id = name
                     songs.append(song)
                 }
             } catch {
@@ -49,13 +58,26 @@ public struct SongLibraryStore: Sendable {
 
     /// Writes `song.json`, plus the original file if given. Creates the folder.
     public func save(_ song: Song, originalFileName: String? = nil, originalData: Data? = nil) throws {
+        guard Self.isSafeFolderName(song.id) else { throw SongImportError("song id \"\(song.id)\" isn't a valid folder name") }
+        // Encode first, so a song that can't be written never leaves a half-made folder behind.
+        let encoder = JSONEncoder()
+        encoder.outputFormatting = [.sortedKeys]
+        let json = try encoder.encode(song)
+        let fileManager = FileManager.default
         let folder = folder(for: song.id)
-        try FileManager.default.createDirectory(at: folder, withIntermediateDirectories: true)
-        if let originalData {
-            let ext = originalFileName.map { URL(fileURLWithPath: $0).pathExtension.lowercased() } ?? "dat"
-            try originalData.write(to: folder.appendingPathComponent("original.\(ext.isEmpty ? "dat" : ext)"), options: .atomic)
+        let existed = fileManager.fileExists(atPath: folder.path)
+        do {
+            try fileManager.createDirectory(at: folder, withIntermediateDirectories: true)
+            if let originalData {
+                let ext = originalFileName.map { URL(fileURLWithPath: $0).pathExtension.lowercased() } ?? "dat"
+                let safeExt = ext.isEmpty || !Self.isSafeFolderName(ext) ? "dat" : ext
+                try originalData.write(to: folder.appendingPathComponent("original.\(safeExt)"), options: .atomic)
+            }
+            try json.write(to: folder.appendingPathComponent(Self.songFileName), options: .atomic)
+        } catch {
+            if !existed { try? fileManager.removeItem(at: folder) }
+            throw error
         }
-        try JSONFileStore<Song>(url: folder.appendingPathComponent(Self.songFileName)).save(song)
     }
 
     /// Copies an audio file into the song's folder as `backing.<ext>` (replacing any previous one) and saves.
@@ -64,19 +86,29 @@ public struct SongLibraryStore: Sendable {
         let fileManager = FileManager.default
         let folder = folder(for: song.id)
         try fileManager.createDirectory(at: folder, withIntermediateDirectories: true)
-        if let old = backingAudioURL(for: song), fileManager.fileExists(atPath: old.path) {
-            try fileManager.removeItem(at: old)
-        }
         let ext = source.pathExtension.lowercased()
-        let name = "backing.\(ext.isEmpty ? "audio" : ext)"
+        let name = "backing.\(ext.isEmpty || !Self.isSafeFolderName(ext) ? "audio" : ext)"
         let destination = folder.appendingPathComponent(name)
-        if fileManager.fileExists(atPath: destination.path) {
-            try fileManager.removeItem(at: destination)
+        // Copy next to the destination first: if the copy fails (disk full, unreadable source) the old backing
+        // audio and song.json are untouched.
+        let staging = folder.appendingPathComponent("backing.incoming-\(UUID().uuidString)")
+        try fileManager.copyItem(at: source, to: staging)
+        do {
+            if fileManager.fileExists(atPath: destination.path) {
+                _ = try fileManager.replaceItemAt(destination, withItemAt: staging)
+            } else {
+                try fileManager.moveItem(at: staging, to: destination)
+            }
+        } catch {
+            try? fileManager.removeItem(at: staging)
+            throw error
         }
-        try fileManager.copyItem(at: source, to: destination)
         var updated = song
         updated.backingAudioFile = name
         try save(updated)
+        if let old = backingAudioURL(for: song), old.lastPathComponent != name, fileManager.fileExists(atPath: old.path) {
+            try? fileManager.removeItem(at: old)
+        }
         return updated
     }
 

@@ -10,10 +10,10 @@ final class LatencyStore: ObservableObject {
     private let store = JSONFileStore<LatencyProfiles>(url: AppPaths.latencyFile)
 
     init() {
-        do {
-            profiles = try store.load() ?? LatencyProfiles()
-        } catch {
-            AppLog.error("Latency profiles unreadable, starting fresh: \(error)", category: "latency")
+        let loaded = store.loadOrQuarantine()
+        profiles = loaded.value ?? LatencyProfiles()
+        if let problem = loaded.problem {
+            AppLog.error("Latency profiles unreadable, starting fresh: \(problem)", category: "latency")
         }
     }
 

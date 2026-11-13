@@ -49,7 +49,20 @@ final class AudioInput: ObservableObject {
 
     private var engine = AVAudioEngine()
     private let analyzer = PitchAnalyzer()
-    private var clients: Set<String> = []
+    /// Screens holding the engine, and whether each needs the microphone (a playback-only client, like the key
+    /// preview, must not turn the mic on or trigger the permission prompt).
+    private var clients: [String: Bool] = [:]
+    /// The engine is currently set up (with or without the input tap).
+    private var engineConfigured = false
+    /// The running engine has the microphone tap installed.
+    private var micActive = false
+    private var micNeeded: Bool { clients.values.contains(true) }
+    /// Called synchronously whenever the running engine is torn down (stop, restart, media reset), before
+    /// anything restarts. Screens with a song clock pause on it: a restarted engine has a new output timeline,
+    /// and scheduled backing/clicks are gone.
+    private var engineStopListeners: [String: () -> Void] = [:]
+    /// One restart at a time: a headphone unplug fires a route change and a configuration change together.
+    private var restartScheduled = false
     private var inBackground = false
     private var accidentals: Accidentals = .sharps
     private var pipelineConfiguration = PitchPipelineConfiguration()
@@ -81,18 +94,37 @@ final class AudioInput: ObservableObject {
 
     // MARK: Clients
 
-    func acquire(_ client: String) async {
-        clients.insert(client)
-        AppLog.info("Audio requested by \(client)", category: "audio")
-        await startIfNeeded(reason: "\(client) opened")
+    /// Holds the audio engine for `client`. `needsMic: false` is playback only: no microphone, no permission
+    /// prompt, no recording indicator.
+    func acquire(_ client: String, needsMic: Bool = true) async {
+        // A view that already disappeared must not register late and leave the mic on.
+        guard !Task.isCancelled else { return }
+        clients[client] = needsMic
+        AppLog.info("Audio requested by \(client)\(needsMic ? "" : " (playback only)")", category: "audio")
+        if state == .running, needsMic, !micActive {
+            await restart(reason: "\(client) needs the microphone")
+        } else {
+            await startIfNeeded(reason: "\(client) opened")
+        }
     }
 
     func release(_ client: String) {
-        guard clients.remove(client) != nil else { return }
+        guard clients.removeValue(forKey: client) != nil else { return }
         AppLog.info("Audio released by \(client)", category: "audio")
         if clients.isEmpty {
             stop(reason: "no screen needs audio")
+        } else if micActive, !micNeeded {
+            // Only playback clients are left: drop the microphone.
+            Task { await restart(reason: "microphone no longer needed") }
         }
+    }
+
+    /// Backstop for the home screen: nothing there needs audio, so drop any client that was left behind.
+    func releaseAll(reason: String) {
+        guard !clients.isEmpty else { return }
+        AppLog.warning("Releasing leftover audio clients \(clients.keys.sorted()) (\(reason))", category: "audio")
+        clients.removeAll()
+        stop(reason: reason)
     }
 
     func retry() async {
@@ -103,6 +135,14 @@ final class AudioInput: ObservableObject {
 
     func addFrameListener(_ name: String, _ handler: @escaping (PitchAnalyzer.Batch, Double) -> Void) {
         frameListeners[name] = handler
+    }
+
+    func addEngineStopListener(_ name: String, _ handler: @escaping () -> Void) {
+        engineStopListeners[name] = handler
+    }
+
+    func removeEngineStopListener(_ name: String) {
+        engineStopListeners[name] = nil
     }
 
     func removeFrameListener(_ name: String) {
@@ -271,9 +311,33 @@ final class AudioInput: ObservableObject {
     }
 
     func enterForeground() async {
-        guard inBackground else { return }
+        if !inBackground {
+            // Became active without going to the background (e.g. a call ended but the interruption-ended
+            // notification never came): recover a stuck interrupted or failed engine.
+            switch state {
+            case .interrupted, .failed:
+                if !clients.isEmpty { await restart(reason: "app active again, audio was \(state)") }
+            default:
+                break
+            }
+            return
+        }
         inBackground = false
+        if case .failed = state { state = .idle }
         await startIfNeeded(reason: "app returned to foreground")
+    }
+
+    /// Restart once, later, however many system notifications ask for it.
+    private func scheduleRestart(reason: String) {
+        guard !restartScheduled else {
+            AppLog.debug("Restart already scheduled; skipping (\(reason))", category: "audio")
+            return
+        }
+        restartScheduled = true
+        Task {
+            restartScheduled = false
+            await restart(reason: reason)
+        }
     }
 
     private var isActive: Bool {
@@ -294,7 +358,9 @@ final class AudioInput: ObservableObject {
         isStarting = true
         defer { isStarting = false }
 
-        switch AVAudioApplication.shared.recordPermission {
+        let wantsMic = micNeeded
+        let permission = wantsMic ? AVAudioApplication.shared.recordPermission : .granted
+        switch permission {
         case .granted:
             break
         case .denied:
@@ -323,19 +389,26 @@ final class AudioInput: ObservableObject {
 
         state = .starting
         do {
-            try configureSession()
-            try startEngine()
+            try configureSession(microphone: wantsMic)
+            try startEngine(microphone: wantsMic)
             state = .running
-            AppLog.info("Audio running (\(reason))", category: "audio")
+            AppLog.info("Audio running (\(reason), microphone \(wantsMic ? "on" : "off"))", category: "audio")
         } catch {
             AppLog.error("Audio start failed (\(reason)): \(error.localizedDescription)", category: "audio")
             tearDownEngine()
+            // Don't leave the session active (it would keep other apps' audio interrupted).
+            try? AVAudioSession.sharedInstance().setActive(false, options: .notifyOthersOnDeactivation)
             state = .failed(error.localizedDescription)
+        }
+        // A microphone client may have arrived while a playback-only start was in flight.
+        if state == .running, micNeeded, !micActive {
+            isStarting = false
+            await restart(reason: "microphone needed")
         }
     }
 
     private func stop(reason: String) {
-        if isActive || tapSampleRate > 0 {
+        if isActive || engineConfigured {
             tearDownEngine()
             do {
                 try AVAudioSession.sharedInstance().setActive(false, options: .notifyOthersOnDeactivation)
@@ -354,9 +427,13 @@ final class AudioInput: ObservableObject {
         await startIfNeeded(reason: reason)
     }
 
-    private func configureSession() throws {
+    private func configureSession(microphone: Bool) throws {
         let session = AVAudioSession.sharedInstance()
-        try session.setCategory(.playAndRecord, mode: .measurement, options: [.defaultToSpeaker, .allowBluetoothA2DP])
+        if microphone {
+            try session.setCategory(.playAndRecord, mode: .measurement, options: [.defaultToSpeaker, .allowBluetoothA2DP])
+        } else {
+            try session.setCategory(.playback, mode: .default, options: [])
+        }
         do {
             try session.setPreferredSampleRate(48_000)
         } catch {
@@ -377,7 +454,19 @@ final class AudioInput: ObservableObject {
         )
     }
 
-    private func startEngine() throws {
+    private func startEngine(microphone: Bool) throws {
+        engineConfigured = true
+        guard microphone else {
+            // Playback only: never touch the input node, so the microphone stays off.
+            attachClickPlayer()
+            attachPlayback()
+            engine.prepare()
+            try engine.start()
+            clickPlayer?.play()
+            micActive = false
+            AppLog.info("Engine started: playback only (no microphone)", category: "audio")
+            return
+        }
         let input = engine.inputNode
         let format = input.outputFormat(forBus: 0)
         guard format.sampleRate > 0, format.channelCount > 0 else {
@@ -387,6 +476,7 @@ final class AudioInput: ObservableObject {
         input.removeTap(onBus: 0)
         input.installTap(onBus: 0, bufferSize: 1_024, format: format, block: analyzer.makeTapBlock())
         tapSampleRate = format.sampleRate
+        micActive = true
         attachClickPlayer()
         attachPlayback()
         engine.prepare()
@@ -408,14 +498,24 @@ final class AudioInput: ObservableObject {
 
     private func tearDownEngine() {
         backing.stop()
-        if tapSampleRate > 0 {
+        if engineConfigured {
             engine.stop()
-            engine.inputNode.removeTap(onBus: 0)
+            guideVoice?.invalidateAnchor()
+            notifyEngineStopped()
+            if micActive {
+                engine.inputNode.removeTap(onBus: 0)
+            }
             tapSampleRate = 0
+            micActive = false
+            engineConfigured = false
         }
         analyzer.stop()
         latest = nil
         diagnostics.setRunning(false)
+    }
+
+    private func notifyEngineStopped() {
+        for handler in engineStopListeners.values { handler() }
     }
 
     // MARK: Frames
@@ -427,7 +527,7 @@ final class AudioInput: ObservableObject {
         guard state == .running, let last = batch.frames.last else { return }
         // Only the tuner needs the published stream. Publishing ~47x/s while the game runs would re-render
         // every observing view on top of the game's own 120 Hz timeline.
-        if clients.contains("tuner") {
+        if clients["tuner"] != nil {
             var updated = history
             for frame in batch.frames {
                 updated.append(frame)
@@ -499,6 +599,9 @@ final class AudioInput: ObservableObject {
         case .began:
             AppLog.warning("Interruption began (reason \(reasonRaw.map { String($0) } ?? "n/a"), state \(state))", category: "audio")
             if state == .running || state == .starting {
+                // The engine stopped rendering: clocks pause now, not when audio comes back.
+                guideVoice?.invalidateAnchor()
+                notifyEngineStopped()
                 state = .interrupted
                 latest = nil
                 diagnostics.setRunning(false)
@@ -506,8 +609,11 @@ final class AudioInput: ObservableObject {
         case .ended:
             let options = AVAudioSession.InterruptionOptions(rawValue: optionsRaw ?? 0)
             AppLog.info("Interruption ended (shouldResume \(options.contains(.shouldResume)))", category: "audio")
-            if state == .interrupted {
-                Task { await restart(reason: "interruption ended") }
+            switch state {
+            case .interrupted, .failed:
+                scheduleRestart(reason: "interruption ended")
+            default:
+                break
             }
         @unknown default:
             AppLog.warning("Unknown interruption type \(typeRaw)", category: "audio")
@@ -520,9 +626,10 @@ final class AudioInput: ObservableObject {
         AppLog.info("Route change: \(Self.name(reason)) -> \(route)", category: "audio")
         updateRoute()
         guard state == .running else { return }
-        let rate = engine.inputNode.outputFormat(forBus: 0).sampleRate
-        if !engine.isRunning || rate != tapSampleRate {
-            Task { await restart(reason: "route change, input now \(Int(rate)) Hz, engine running \(engine.isRunning)") }
+        // In playback-only mode the input node must not be touched (it would switch the microphone on).
+        let rate = micActive ? engine.inputNode.outputFormat(forBus: 0).sampleRate : 0
+        if !engine.isRunning || (micActive && rate != tapSampleRate) {
+            scheduleRestart(reason: "route change, input now \(Int(rate)) Hz, engine running \(engine.isRunning)")
         }
     }
 
@@ -530,14 +637,19 @@ final class AudioInput: ObservableObject {
         guard source == nil || source == ObjectIdentifier(engine) else { return }
         AppLog.info("Engine configuration changed (running \(engine.isRunning), state \(state))", category: "audio")
         if state == .running {
-            Task { await restart(reason: "engine configuration change") }
+            scheduleRestart(reason: "engine configuration change")
         }
     }
 
     private func handleMediaServicesReset() {
         AppLog.warning("Media services were reset; rebuilding audio engine", category: "audio")
         let wasActive = isActive
+        backing.stop()
+        guideVoice?.invalidateAnchor()
+        notifyEngineStopped()
         tapSampleRate = 0
+        micActive = false
+        engineConfigured = false
         analyzer.stop()
         engine = AVAudioEngine()
         clickPlayer = nil

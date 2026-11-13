@@ -55,6 +55,12 @@ final class GuideVoice: @unchecked Sendable {
         timeline.store(WordPair(first: 0, second: UInt(Double.nan.bitPattern)), ordering: .releasing)
     }
 
+    /// Forget the last output-clock reading. Call right after the engine stops: a restarted engine's sample time
+    /// starts over, so the old (sample, host) pair must never be used to anchor a new clock.
+    func invalidateAnchor() {
+        anchor.store(WordPair(first: 0, second: 0), ordering: .releasing)
+    }
+
     func setVolume(_ volume: Float) {
         volumeBits.store(max(0, min(1, volume)).bitPattern, ordering: .relaxed)
     }
@@ -109,6 +115,7 @@ final class GuideVoice: @unchecked Sendable {
                 frameCount: frames,
                 sampleRate: sampleRate,
                 songTime: songTime,
+                rate: rate,
                 advancing: advancing,
                 volume: Float(bitPattern: volumeBits.load(ordering: .relaxed))
             )

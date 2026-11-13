@@ -85,11 +85,14 @@ final class SongTimebase {
     }
 
     /// Continues after the resume countdown, on the current output timeline (also after an engine restart).
-    func resume() {
-        guard let audio, let render = renderNow() else { return }
+    /// Returns false (and stays paused) while the engine isn't rendering yet.
+    @discardableResult
+    func resume() -> Bool {
+        guard let audio, let render = renderNow() else { return false }
         latency = audio.latency
         clock.resume(at: render)
         publish()
+        return true
     }
 
     func stop() {

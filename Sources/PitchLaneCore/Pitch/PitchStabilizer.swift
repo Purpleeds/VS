@@ -23,6 +23,11 @@ public struct PitchStabilizerConfiguration: Sendable, Equatable {
     public var jumpAgreementSemitones: Double
     /// Unvoiced frames in a row after which the history is cleared.
     public var resetAfterUnvoicedFrames: Int
+    /// Hysteresis: while a note is already sounding, a frame this confident is still accepted if it stays within
+    /// `holdSemitones` of the current median (keeps breathy singing from flickering). Starting a note still
+    /// needs `minimumConfidence`.
+    public var holdConfidence: Double
+    public var holdSemitones: Double
 
     public init(
         noiseGateDBFS: Double = -50,
@@ -31,7 +36,9 @@ public struct PitchStabilizerConfiguration: Sendable, Equatable {
         jumpSemitones: Double = 9,
         jumpConfirmationFrames: Int = 3,
         jumpAgreementSemitones: Double = 1.5,
-        resetAfterUnvoicedFrames: Int = 3
+        resetAfterUnvoicedFrames: Int = 3,
+        holdConfidence: Double = 0.80,
+        holdSemitones: Double = 1.0
     ) {
         self.noiseGateDBFS = noiseGateDBFS
         self.minimumConfidence = minimumConfidence
@@ -40,6 +47,8 @@ public struct PitchStabilizerConfiguration: Sendable, Equatable {
         self.jumpConfirmationFrames = max(1, jumpConfirmationFrames)
         self.jumpAgreementSemitones = jumpAgreementSemitones
         self.resetAfterUnvoicedFrames = max(1, resetAfterUnvoicedFrames)
+        self.holdConfidence = min(holdConfidence, minimumConfidence)
+        self.holdSemitones = max(0, holdSemitones)
     }
 }
 
@@ -82,12 +91,18 @@ public struct PitchStabilizer: Sendable {
         if estimate.isAboveRange {
             return unvoiced(.outOfRange)
         }
-        guard let frequency = estimate.frequency, frequency > 0,
-              estimate.confidence >= configuration.minimumConfidence else {
+        guard let frequency = estimate.frequency, frequency > 0, frequency.isFinite else {
             return unvoiced(.lowConfidence)
         }
-        unvoicedRun = 0
         let midi = PitchMath.midi(fromFrequency: frequency)
+        if estimate.confidence < configuration.minimumConfidence {
+            // Hysteresis: a slightly less confident frame continues the current note, never starts or moves one.
+            guard estimate.confidence >= configuration.holdConfidence, !history.isEmpty,
+                  abs(midi - median(of: history)) <= configuration.holdSemitones else {
+                return unvoiced(.lowConfidence)
+            }
+        }
+        unvoicedRun = 0
 
         if !history.isEmpty {
             let reference = median(of: history)

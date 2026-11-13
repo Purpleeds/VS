@@ -55,13 +55,13 @@ public enum UltraStarImporter {
                 headers[key] = value
                 switch key {
                 case "BPM":
-                    guard let value = number(from: value), value > 0, value.isFinite else {
-                        throw SongImportError(line: lineNumber, "#BPM must be a positive number, got \"\(value)\"")
+                    guard let value = number(from: value), value.isFinite, (1...5_000).contains(value) else {
+                        throw SongImportError(line: lineNumber, "#BPM must be a number from 1 to 5000, got \"\(value.prefix(40))\"")
                     }
                     bpm = value
                 case "GAP":
-                    guard let value = number(from: value), value.isFinite else {
-                        throw SongImportError(line: lineNumber, "#GAP must be a number of milliseconds, got \"\(value)\"")
+                    guard let value = number(from: value), value.isFinite, abs(value) <= 3_600_000 else {
+                        throw SongImportError(line: lineNumber, "#GAP must be a number of milliseconds (up to an hour), got \"\(value.prefix(40))\"")
                     }
                     gapMs = value
                 case "RELATIVE":
@@ -82,7 +82,8 @@ public enum UltraStarImporter {
                     throw SongImportError(line: lineNumber, "duet marker should be P1 or P2, got \"\(line)\"")
                 }
                 sawDuet = true
-                skippingPlayer = player != 1
+                // P1 = first singer, P2 = second, P3 = both: player 1 sings P1 and P3.
+                skippingPlayer = (player & 1) == 0
 
             case ":", "*", "F", "R", "G":
                 if skippingPlayer { continue }
@@ -92,6 +93,12 @@ public enum UltraStarImporter {
                 }
                 guard length > 0 else {
                     throw SongImportError(line: lineNumber, "note length must be greater than 0")
+                }
+                guard (-60...67).contains(pitch) else {
+                    throw SongImportError(line: lineNumber, "pitch \(pitch) is out of range (-60 to 67, where 0 is middle C)")
+                }
+                guard rawNotes.count < SongLimits.maximumNotes else {
+                    throw SongImportError(line: lineNumber, "more than \(SongLimits.maximumNotes) notes")
                 }
                 rawNotes.append(RawNote(
                     type: type, beat: lineStart + Double(start), length: Double(length), pitch: pitch,
@@ -137,15 +144,20 @@ public enum UltraStarImporter {
         guard !rawNotes.isEmpty else {
             throw SongImportError("no notes found")
         }
-        let warnings = sawDuet ? ["Duet file: imported player 1 only."] : []
+        var warnings = sawDuet ? ["Duet file: imported player 1 only."] : []
         let beatSeconds = 60 / (bpm * 4)
         let gap = gapMs / 1_000
         let ordered = rawNotes.enumerated().sorted { ($0.element.beat, $0.offset) < ($1.element.beat, $1.offset) }.map(\.element)
         var notes: [SongNote] = []
         notes.reserveCapacity(ordered.count)
+        var earlyNotes = 0
         for raw in ordered {
             let start = gap + raw.beat * beatSeconds
             let duration = raw.length * beatSeconds
+            guard SongLimits.isSensible(start: start, duration: duration) else {
+                throw SongImportError("a note at beat \(Int(raw.beat)) lands outside a sensible song length (check #BPM and #GAP)")
+            }
+            if start < 0 { earlyNotes += 1 }
             let trimmed = raw.text.trimmingCharacters(in: .whitespaces)
             let isContinuation = trimmed.hasPrefix("~") && !notes.isEmpty
             notes.append(SongNote(
@@ -159,10 +171,13 @@ public enum UltraStarImporter {
                 slideDuration: isContinuation ? min(continuationSlide, duration / 2) : nil
             ))
         }
+        if earlyNotes > 0 {
+            warnings.append("\(earlyNotes) note(s) start before the song does and can't be scored.")
+        }
         let song = Song(
             id: id,
-            title: headers["TITLE"].flatMap { $0.isEmpty ? nil : $0 } ?? fallbackTitle,
-            artist: headers["ARTIST"] ?? "",
+            title: SongLimits.clip(headers["TITLE"].flatMap { $0.isEmpty ? nil : $0 } ?? fallbackTitle),
+            artist: SongLimits.clip(headers["ARTIST"] ?? ""),
             source: .ultraStar,
             notes: notes,
             lineBreaks: rawBreaks.map { gap + $0 * beatSeconds },

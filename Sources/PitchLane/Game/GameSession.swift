@@ -59,6 +59,8 @@ final class GameSession: ObservableObject {
     @Published private(set) var results: [NoteResult] = []
     @Published private(set) var guideOn: Bool
     @Published private(set) var hasBacking = false
+    /// Shown once at game start when the song has backing audio that can't be played.
+    @Published var backingProblem: String?
     @Published private(set) var health = 1.0
     @Published private(set) var loopPasses: [Double] = []
     @Published private(set) var failed = false
@@ -94,7 +96,8 @@ final class GameSession: ObservableObject {
     private var backingURL: URL?
 
     /// The stabiliser's 5-frame median lags ~20 ms behind the sound.
-    static let pitchLatency = 0.02
+    /// Analysis delay of the stabilised pitch line (window + 5-frame median), measured at 23-27 ms.
+    static let pitchLatency = 0.025
     private static let listenerName = "game"
 
     init(song: Song, options: GameOptions) {
@@ -122,6 +125,8 @@ final class GameSession: ObservableObject {
 
     // MARK: Lifecycle
 
+    private var startRetryScheduled = false
+
     func begin(audio: AudioInput, scores: ScoreStore, backingURL: URL?) {
         self.audio = audio
         self.scores = scores
@@ -130,6 +135,11 @@ final class GameSession: ObservableObject {
         audio.backing.setRate(options.practice.speed)
         audio.addFrameListener(Self.listenerName) { [weak self] batch, arrival in
             self?.receive(batch, arrival: arrival)
+        }
+        // A restarted engine has a new output timeline and has dropped the scheduled backing and clicks: pause,
+        // and the player resumes on the new timeline.
+        audio.addEngineStopListener(Self.listenerName) { [weak self] in
+            self?.pause(reason: "audio engine stopped")
         }
         audio.installGuide(GuideToneRenderer(song: song, envelope: .soft))
         audio.setGuideVolume(guideOn ? Float(options.guideVolume) : 0)
@@ -166,6 +176,7 @@ final class GameSession: ObservableObject {
             )
         } catch {
             hasBacking = false
+            backingProblem = "The backing audio couldn't be opened, so this run plays without it. (\(error.localizedDescription))"
             AppLog.error("Backing audio couldn't be opened: \(error.localizedDescription)", category: "game")
         }
     }
@@ -173,6 +184,7 @@ final class GameSession: ObservableObject {
     func end() {
         audio?.diagnostics.clearGameFrameStats()
         audio?.removeFrameListener(Self.listenerName)
+        audio?.removeEngineStopListener(Self.listenerName)
         audio?.cancelClicks()
         audio?.backing.unload()
         audio?.backing.setRate(1)
@@ -206,15 +218,21 @@ final class GameSession: ObservableObject {
         AppLog.info("Game paused (\(reason)) at \(String(format: "%.2f", currentSongTime())) s", category: "game")
     }
 
-    func resume() {
-        guard phase == .paused, let timebase else { return }
-        timebase.resume()
+    /// Returns false while audio isn't running yet; the game then stays paused (no frozen "running" lane).
+    @discardableResult
+    func resume() -> Bool {
+        guard phase == .paused, let timebase else { return false }
+        guard audio?.state == .running, timebase.resume() else {
+            AppLog.info("Resume deferred: audio not running yet (\(audio.map { "\($0.state)" } ?? "none"))", category: "game")
+            return false
+        }
         lastRenderHost = nil
         phase = .running
         if let anchor = timebase.clock.anchor {
             scheduleBacking(fromSong: anchor.songTime)
         }
         AppLog.info("Game resumed at \(String(format: "%.2f", currentSongTime())) s", category: "game")
+        return true
     }
 
     func restart() {
@@ -393,8 +411,10 @@ final class GameSession: ObservableObject {
         frameMeter.tick(at: host)
         let dt = lastRenderHost.map { host - $0 } ?? 0
         lastRenderHost = host
-        if phase == .waitingForAudio, timebase != nil {
+        if phase == .waitingForAudio, timebase != nil, !startRetryScheduled {
+            startRetryScheduled = true
             Task { @MainActor [weak self] in
+                self?.startRetryScheduled = false
                 if self?.phase == .waitingForAudio { self?.startWhenClockIsReady() }
             }
         }
@@ -513,15 +533,16 @@ final class ScoreStore: ObservableObject {
     private let historyStore = JSONFileStore<GameHistory>(url: AppPaths.historyFile)
 
     init() {
-        do {
-            bests = try bestsStore.load() ?? PersonalBests()
-        } catch {
-            AppLog.error("Personal bests unreadable, starting fresh: \(error)", category: "game")
+        // An unreadable file is moved aside (not overwritten by the next save), so it can still be recovered.
+        let loadedBests = bestsStore.loadOrQuarantine()
+        bests = loadedBests.value ?? PersonalBests()
+        if let problem = loadedBests.problem {
+            AppLog.error("Personal bests unreadable, starting fresh: \(problem)", category: "game")
         }
-        do {
-            history = try historyStore.load() ?? GameHistory()
-        } catch {
-            AppLog.error("History unreadable, starting fresh: \(error)", category: "game")
+        let loadedHistory = historyStore.loadOrQuarantine()
+        history = loadedHistory.value ?? GameHistory()
+        if let problem = loadedHistory.problem {
+            AppLog.error("History unreadable, starting fresh: \(problem)", category: "game")
         }
     }
 

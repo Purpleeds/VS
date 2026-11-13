@@ -11,10 +11,19 @@ final class RangeTestModel: ObservableObject {
     @Published private(set) var message: String?
 
     private var flow = RangeTestFlow()
+    /// Keeps the flow's clock monotonic across an engine restart (the analyser's stream time starts over).
+    private var timeOffset = 0.0
+    private var lastTime = -Double.infinity
 
     func receive(_ batch: PitchAnalyzer.Batch) {
         for frame in batch.frames {
-            guard let event = flow.add(time: frame.time, midi: frame.midi) else { continue }
+            if frame.time + timeOffset < lastTime - 0.5 {
+                timeOffset = lastTime - frame.time
+                AppLog.info("Range test: audio stream restarted, keeping the clock continuous", category: "range")
+            }
+            let time = frame.time + timeOffset
+            lastTime = time
+            guard let event = flow.add(time: time, midi: frame.midi) else { continue }
             switch event {
             case .lockedLow(let note):
                 message = nil
@@ -76,6 +85,7 @@ struct RangeTestView: View {
         .task {
             audio.addFrameListener("range") { batch, _ in model.receive(batch) }
             await audio.acquire("range")
+            if Task.isCancelled { audio.release("range") }
         }
         .onDisappear {
             audio.removeFrameListener("range")

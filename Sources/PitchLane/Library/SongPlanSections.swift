@@ -13,19 +13,36 @@ struct GamePlan: Hashable {
 @MainActor
 final class TransposePreview: ObservableObject {
     @Published private(set) var isPlaying = false
+    @Published private(set) var isStarting = false
+    @Published private(set) var problem: String?
     private weak var audio: AudioInput?
     private var timebase: SongTimebase?
     private var stopTask: Task<Void, Never>?
+    /// Bumped by every play/stop, so a play call that resumes after a newer one gives up.
+    private var generation = 0
 
     func play(song: Song, audio: AudioInput, volume: Double) async {
         stop()
         guard let first = song.notes.first else { return }
+        generation += 1
+        let mine = generation
         self.audio = audio
-        await audio.acquire("preview")
+        problem = nil
+        isStarting = true
+        defer { if generation == mine { isStarting = false } }
+        // Playback only: the preview never turns the microphone on or asks for permission.
+        await audio.acquire("preview", needsMic: false)
+        guard generation == mine, !Task.isCancelled else {
+            if generation == mine { audio.release("preview") }
+            return
+        }
         guard audio.state == .running else {
+            problem = "Audio couldn't start, so the preview can't play."
+            AppLog.warning("Transpose preview: audio \(audio.state)", category: "library")
             audio.release("preview")
             return
         }
+        audio.addEngineStopListener("preview") { [weak self] in self?.stop() }
         let excerpt = song.excerpt(from: max(0, first.start - 0.1), duration: 7)
         audio.installGuide(GuideToneRenderer(song: excerpt, envelope: .soft))
         audio.setGuideVolume(Float(max(0.5, volume)))
@@ -34,6 +51,7 @@ final class TransposePreview: ObservableObject {
         for _ in 0..<60 {
             if timebase.start() { break }
             try? await Task.sleep(for: .milliseconds(20))
+            guard generation == mine else { return }
         }
         guard timebase.isStarted else {
             stop()
@@ -41,19 +59,24 @@ final class TransposePreview: ObservableObject {
         }
         isPlaying = true
         AppLog.info("Transpose preview started (\(excerpt.notes.count) notes)", category: "library")
-        stopTask = Task { @MainActor [weak self] in
+        // Strong capture on purpose: the preview must always release the engine, even if its view has gone.
+        stopTask = Task { @MainActor in
             try? await Task.sleep(for: .seconds(excerpt.duration + 0.8))
-            if !Task.isCancelled { self?.stop() }
+            if !Task.isCancelled, self.generation == mine { self.stop() }
         }
     }
 
     func stop() {
         stopTask?.cancel()
         stopTask = nil
-        guard timebase != nil || isPlaying else { return }
+        let wasStarting = isStarting
+        generation += 1
+        isStarting = false
+        guard timebase != nil || isPlaying || wasStarting else { return }
+        audio?.removeEngineStopListener("preview")
         timebase?.stop()
         timebase = nil
-        audio?.installGuide(nil)
+        if isPlaying { audio?.installGuide(nil) }
         audio?.release("preview")
         isPlaying = false
     }
@@ -66,7 +89,9 @@ struct TransposeSection: View {
 
     @EnvironmentObject private var settings: SettingsModel
     @EnvironmentObject private var audio: AudioInput
-    @StateObject private var preview = TransposePreview()
+    /// Owned by the song sheet, so scrolling this section off-screen doesn't stop the preview, and closing the
+    /// sheet always does.
+    @ObservedObject var preview: TransposePreview
 
     var body: some View {
         let accidentals = settings.settings.accidentals
@@ -95,14 +120,25 @@ struct TransposeSection: View {
                     }
                 }
             }
-            HStack {
-                stepButton("-1 oct", -12)
-                stepButton("-1", -1)
-                Text(SongTransposer.shiftText(shift))
-                    .font(.subheadline.weight(.semibold))
-                    .frame(maxWidth: .infinity)
-                stepButton("+1", 1)
-                stepButton("+1 oct", 12)
+            // Wraps onto two rows at large text sizes instead of truncating.
+            ViewThatFits(in: .horizontal) {
+                HStack {
+                    stepButton("-1 oct", -12)
+                    stepButton("-1", -1)
+                    shiftLabel
+                    stepButton("+1", 1)
+                    stepButton("+1 oct", 12)
+                }
+                VStack(spacing: 8) {
+                    shiftLabel
+                    HStack {
+                        stepButton("-1 oct", -12)
+                        stepButton("-1", -1)
+                        Spacer()
+                        stepButton("+1", 1)
+                        stepButton("+1 oct", 12)
+                    }
+                }
             }
             .buttonStyle(.bordered)
             .controlSize(.small)
@@ -116,10 +152,15 @@ struct TransposeSection: View {
                 } label: {
                     Label(preview.isPlaying ? "Stop preview" : "Preview in this key", systemImage: preview.isPlaying ? "stop.fill" : "speaker.wave.2")
                 }
+                .disabled(preview.isStarting)
+                if preview.isStarting { ProgressView().controlSize(.small) }
                 Spacer()
                 if shift != 0 {
                     Button("Reset", role: .destructive) { shift = 0 }
                 }
+            }
+            if let problem = preview.problem {
+                Text(problem).font(.caption).foregroundStyle(Theme.warn)
             }
         } header: {
             Text("Key")
@@ -131,7 +172,13 @@ struct TransposeSection: View {
         .onChange(of: shift) { _, _ in
             preview.stop()
         }
-        .onDisappear { preview.stop() }
+    }
+
+    private var shiftLabel: some View {
+        Text(SongTransposer.shiftText(shift))
+            .font(.subheadline.weight(.semibold))
+            .frame(maxWidth: .infinity)
+            .accessibilityLabel("Shift \(SongTransposer.shiftText(shift))")
     }
 
     private func stepButton(_ title: String, _ delta: Int) -> some View {

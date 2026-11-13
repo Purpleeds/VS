@@ -32,6 +32,29 @@ public enum SongSource: String, Codable, Sendable {
     case midi
 }
 
+/// Bounds every song must stay inside (importers and `song.json` decoding enforce them), so nothing downstream
+/// (durations, click track, guide synth, graphs) ever sees absurd values.
+public enum SongLimits {
+    public static let maximumNotes = 20_000
+    /// Notes start within a day either side of zero.
+    public static let maximumAbsoluteStart: Double = 86_400
+    public static let maximumNoteDuration: Double = 600
+    public static let pitchRange: ClosedRange<Int> = 0...127
+    /// Click intervals shorter than this (over 1200 BPM) are ignored.
+    public static let minimumBeatDuration: Double = 0.05
+    public static let maximumTextLength = 200
+
+    public static func isSensible(start: Double, duration: Double) -> Bool {
+        start.isFinite && duration.isFinite && abs(start) <= maximumAbsoluteStart
+            && duration >= 0 && duration <= maximumNoteDuration
+    }
+
+    /// Titles and artists are clipped to a displayable length.
+    public static func clip(_ text: String) -> String {
+        text.count <= maximumTextLength ? text : String(text.prefix(maximumTextLength)) + "…"
+    }
+}
+
 public struct SongNote: Codable, Sendable, Equatable, Hashable {
     /// Seconds from the start of the song (and of its backing audio, before `Song.offsetMs`).
     public var start: Double
@@ -88,6 +111,13 @@ public struct SongNote: Codable, Sendable, Equatable, Hashable {
         isFreestyle = try c.decodeIfPresent(Bool.self, forKey: .isFreestyle) ?? false
         slidesFromPrevious = try c.decodeIfPresent(Bool.self, forKey: .slidesFromPrevious) ?? false
         slideDuration = try c.decodeIfPresent(Double.self, forKey: .slideDuration)
+        guard SongLimits.isSensible(start: start, duration: duration) else {
+            throw DecodingError.dataCorruptedError(forKey: .start, in: c, debugDescription: "note start/duration out of range")
+        }
+        guard SongLimits.pitchRange.contains(pitch) else {
+            throw DecodingError.dataCorruptedError(forKey: .pitch, in: c, debugDescription: "pitch \(pitch) outside MIDI range")
+        }
+        if let slide = slideDuration, !slide.isFinite || slide < 0 { slideDuration = nil }
     }
 }
 
@@ -162,10 +192,18 @@ public struct Song: Codable, Sendable, Equatable, Identifiable {
         difficulty = try? c.decodeIfPresent(Difficulty.self, forKey: .difficulty)
         notes = try c.decode([SongNote].self, forKey: .notes).sorted { $0.start < $1.start }
         lineBreaks = (try c.decodeIfPresent([Double].self, forKey: .lineBreaks) ?? []).sorted()
-        tempo = try c.decodeIfPresent([TempoSegment].self, forKey: .tempo) ?? []
+        tempo = (try c.decodeIfPresent([TempoSegment].self, forKey: .tempo) ?? [])
+            .filter { $0.start.isFinite && $0.beatDuration.isFinite }
         backingAudioFile = try c.decodeIfPresent(String.self, forKey: .backingAudioFile)
-        offsetMs = try c.decodeIfPresent(Double.self, forKey: .offsetMs) ?? 0
+        let offset = try c.decodeIfPresent(Double.self, forKey: .offsetMs) ?? 0
+        offsetMs = offset.isFinite ? max(-60_000, min(60_000, offset)) : 0
+        guard notes.count <= SongLimits.maximumNotes * 2 else {
+            throw DecodingError.dataCorruptedError(forKey: .notes, in: c, debugDescription: "too many notes (\(notes.count))")
+        }
+        lineBreaks = lineBreaks.filter(\.isFinite)
     }
+
+    static let maximumClicksPerCall = 1_024
 
     // MARK: Derived
 
@@ -208,14 +246,19 @@ public struct Song: Codable, Sendable, Equatable, Identifiable {
     public func clickTimes(from start: Double, to end: Double) -> [Double] {
         let segments = tempo.isEmpty ? [TempoSegment(start: 0, beatDuration: 0.5)] : tempo
         var times: [Double] = []
-        for (i, segment) in segments.enumerated() where segment.beatDuration > 0 {
+        guard start.isFinite, end.isFinite, start < end else { return times }
+        for (i, segment) in segments.enumerated()
+        where segment.beatDuration.isFinite && segment.beatDuration >= SongLimits.minimumBeatDuration && segment.start.isFinite {
             let segmentEnd = i + 1 < segments.count ? segments[i + 1].start : .infinity
             let from = max(start, segment.start)
             let to = min(end, segmentEnd)
             guard from < to else { continue }
-            var k = ((from - segment.start) / segment.beatDuration).rounded(.up)
-            while true {
-                let t = segment.start + k * segment.beatDuration
+            // Integer beat index, so the loop always advances; capped so a long window can't run away.
+            let first = ((from - segment.start) / segment.beatDuration).rounded(.up)
+            guard first.isFinite, abs(first) < 1e12 else { continue }
+            var k = Int64(first)
+            while times.count < Self.maximumClicksPerCall {
+                let t = segment.start + Double(k) * segment.beatDuration
                 if t >= to { break }
                 if t >= from { times.append(t) }
                 k += 1
@@ -259,6 +302,7 @@ public struct SongSummary: Sendable, Equatable {
 
     /// e.g. "1:05".
     public var durationText: String {
+        guard duration.isFinite, duration >= 0, duration < 360_000 else { return "–" }
         let total = Int(duration.rounded())
         let seconds = total % 60
         return "\(total / 60):\(seconds < 10 ? "0" : "")\(seconds)"

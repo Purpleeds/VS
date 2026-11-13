@@ -196,10 +196,28 @@ audio), check notes, guide and backing stay together over a whole song, pause/re
 Range test (sing low, high), range card on home, a song outside your range (suggestion + preview), practice at 70%
 with a loop, no-fail, hold drill, instrument mode with your instrument, stats after a few runs, each reset.
 
-## 6. Final review
+## 6. Final review (done)
 
 - Full code review (correctness, audio-thread safety, concurrency warnings), dead code, naming.
 - Performance pass at 120 Hz (frame time, memory, battery), log volume check.
 - Accessibility (Dynamic Type on menus, contrast), empty/error states, permission-denied flows.
 - Re-verify Info.plist keys, no hardcoded bundle ID, no raw audio in logs, release build with zero warnings.
 - Full on-phone regression checklist; tag the release.
+
+### What the review fixed
+Five parallel reviews (audio, pitch engine, UI, data, privacy). Fixed: engine restarts pause the game (engine-stop
+listeners) and never reuse a stale output anchor; resume waits for audio; stuck interrupted/failed states recover;
+practice-speed guide timing; backing format after media reset; coalesced restarts. Pitch: below-range notes unvoiced,
+NaN-safe resampler, subharmonic check + confidence hysteresis for breathy voices, pitch latency 25 ms. Data:
+`SongLimits` (no traps on huge GAP/BPM/pitch), click-track cap, corrupt JSON quarantined instead of overwritten,
+lenient decoding of history/bests/latency/settings, safe song folders, atomic backing replace, MIDI legato lyrics and
+chord fixes, temp-file cleanup. UI: permission/failed states with Settings links and scrolling, pause/results Dynamic
+Type, alerts from the song sheet, MIDI picker vs alert, preview lifetime, VoiceOver values. Privacy: mic off on results
+and idle calibration, playback-only key preview (no mic prompt), logs cleared by Erase everything / Logs > Clear,
+os_log mirror private, local-only clipboard, Privacy section in Settings.
+
+### Not done (needs a device to verify)
+- Backing scheduling upstream of the time-pitch unit at practice speed (may start late at 50%; check the log line
+  "Backing scheduled" against what you hear).
+- Loop wrap: ~100 ms of guide/backing silence and an unscored tail on each pass.
+- Lane text rendering per frame (watch the FPS badge on lyric-dense songs); 120 Hz from `TimelineView(.animation)`.

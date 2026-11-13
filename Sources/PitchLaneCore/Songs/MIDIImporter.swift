@@ -4,8 +4,8 @@ import Foundation
 ///
 /// Reads every track (running status, sysex, meta events), builds one tempo map from all tempo events,
 /// and lists tracks with note counts so the user can pick the melody. `song(track:)` turns one track into a
-/// monophonic `Song`: notes starting together keep only the highest, and overlaps are resolved so the
-/// highest sounding note wins. Lyric meta events on that track become syllables.
+/// monophonic `Song`: wherever notes overlap (chords included) the highest sounding note wins, and a lower
+/// note resumes when it ends. Lyric meta events on that track become syllables.
 /// Malformed files throw `SongImportError` with the byte offset; nothing here traps on bad input.
 public struct MIDIFile: Sendable {
     public struct Track: Sendable, Equatable, Identifiable {
@@ -79,10 +79,10 @@ public struct MIDIFile: Sendable {
             guard end - start >= Self.minimumNoteDuration else { continue }
             var syllable = ""
             if segment.isNoteStart {
-                while lyricIndex < lyrics.count, lyrics[lyricIndex].tick < segment.start - tolerance {
+                while lyricIndex < lyrics.count, lyrics[lyricIndex].tick < segment.noteStart - tolerance {
                     lyricIndex += 1
                 }
-                if lyricIndex < lyrics.count, lyrics[lyricIndex].tick <= segment.start + tolerance {
+                if lyricIndex < lyrics.count, lyrics[lyricIndex].tick <= segment.noteStart + tolerance {
                     syllable = lyrics[lyricIndex].text
                     if lyrics[lyricIndex].startsLine { lineBreaks.append(start) }
                     lyricIndex += 1
@@ -93,7 +93,13 @@ public struct MIDIFile: Sendable {
         guard !notes.isEmpty else {
             throw SongImportError("\(tracks[index].displayName) has no notes long enough to sing")
         }
-        let songTitle = title ?? self.title ?? tracks[index].displayName
+        guard notes.count <= SongLimits.maximumNotes else {
+            throw SongImportError("\(tracks[index].displayName) has \(notes.count) notes; the limit is \(SongLimits.maximumNotes)")
+        }
+        guard let last = notes.last, SongLimits.isSensible(start: last.start, duration: last.duration) else {
+            throw SongImportError("\(tracks[index].displayName) is longer than a song can be")
+        }
+        let songTitle = SongLimits.clip(title ?? self.title ?? tracks[index].displayName)
         return Song(
             id: id,
             title: songTitle,
@@ -215,9 +221,8 @@ public struct MIDIFile: Sendable {
 
         func close(channel: Int, pitch: Int, at tick: Int) {
             let key = channel * 128 + pitch
-            guard var stack = sounding[key], !stack.isEmpty else { return }
-            let started = stack.removeFirst()
-            sounding[key] = stack
+            guard let started = sounding[key]?.first else { return }
+            sounding[key]?.removeFirst()
             if tick > started.tick {
                 track.notes.append(RawNote(start: started.tick, end: tick, pitch: pitch, channel: channel))
             }
@@ -252,7 +257,9 @@ public struct MIDIFile: Sendable {
                         throw SongImportError(byteOffset: eventOffset, "track \(index + 1): tempo event must be 3 bytes")
                     }
                     let micros = Int(data[data.startIndex]) << 16 | Int(data[data.startIndex + 1]) << 8 | Int(data[data.startIndex + 2])
-                    if micros > 0 { track.tempos.append((tick, micros)) }
+                    // Under 50 000 µs per quarter (over 1200 BPM) is not a real tempo; ignoring it keeps the click
+                    // track and timing sane.
+                    if micros >= Self.minimumTempoMicros { track.tempos.append((tick, micros)) }
                 case 0x03:
                     if track.name == nil {
                         track.name = TextDecoding.decode(Data(data)).trimmingCharacters(in: .whitespacesAndNewlines)
@@ -284,9 +291,16 @@ public struct MIDIFile: Sendable {
                     let pitch = Int(try reader.dataByte())
                     let velocity = try reader.dataByte()
                     if kind == 0x90 && velocity > 0 {
-                        sounding[channel * 128 + pitch, default: []].append((tick, channel, pitch))
+                        // Re-striking a key that's already held many times over adds nothing singable.
+                        let key = channel * 128 + pitch
+                        if sounding[key, default: []].count < Self.maximumStackedStrikes {
+                            sounding[key, default: []].append((tick, channel, pitch))
+                        }
                     } else {
                         close(channel: channel, pitch: pitch, at: tick)
+                    }
+                    if track.notes.count > Self.maximumNotesPerTrack {
+                        throw SongImportError(byteOffset: eventOffset, "track \(index + 1) has more than \(Self.maximumNotesPerTrack) notes")
                     }
                 case 0xA0, 0xB0, 0xE0:
                     _ = try reader.dataByte()
@@ -306,34 +320,51 @@ public struct MIDIFile: Sendable {
         return track
     }
 
-    /// Chord collapse + skyline: notes starting together keep only the highest; where notes overlap,
-    /// the highest sounding note wins (a lower note can resume once the higher one ends).
+    static let minimumTempoMicros = 50_000
+    static let maximumStackedStrikes = 16
+    static let maximumNotesPerTrack = 50_000
+
+    /// Skyline: wherever notes overlap (including chords that start together), the highest sounding note wins,
+    /// and a lower note resumes once the higher one ends. A note's first segment is its start, even when it begins
+    /// under a higher note, so its lyric isn't lost.
     static func monophonic(_ input: [RawNote]) -> [Segment] {
-        // 1. Same start tick: keep the highest (input is sorted by start, then pitch descending).
-        var notes: [RawNote] = []
-        for note in input where notes.last?.start != note.start {
-            notes.append(note)
-        }
-        // 2. Sweep line over all boundaries.
+        let notes = input
         let boundaries = Array(Set(notes.flatMap { [$0.start, $0.end] })).sorted()
         var segments: [Segment] = []
-        var active: [Int] = []
+        // Active notes bucketed by pitch; ended notes are dropped lazily from the top bucket, so each sweep step
+        // costs O(128 + bucket) instead of O(active notes).
+        var buckets = [[Int]](repeating: [], count: 128)
+        var started = Set<Int>()
         var next = 0
         for k in 0..<max(0, boundaries.count - 1) {
             let a = boundaries[k]
             let b = boundaries[k + 1]
-            active.removeAll { notes[$0].end <= a }
             while next < notes.count, notes[next].start <= a {
-                if notes[next].end > a { active.append(next) }
+                let pitch = notes[next].pitch
+                if notes[next].end > a, (0..<128).contains(pitch) { buckets[pitch].append(next) }
                 next += 1
             }
-            guard let best = active.max(by: { (notes[$0].pitch, notes[$0].start) < (notes[$1].pitch, notes[$1].start) }) else {
-                continue
+            var best: Int?
+            var pitch = 127
+            while pitch >= 0 {
+                if !buckets[pitch].isEmpty {
+                    buckets[pitch].removeAll { notes[$0].end <= a }
+                    if let latest = buckets[pitch].max(by: { notes[$0].start < notes[$1].start }) {
+                        best = latest
+                        break
+                    }
+                }
+                pitch -= 1
             }
+            guard let best else { continue }
             if let last = segments.last, last.noteIndex == best, last.end == a {
                 segments[segments.count - 1].end = b
             } else {
-                segments.append(Segment(start: a, end: b, pitch: notes[best].pitch, noteIndex: best, isNoteStart: a == notes[best].start))
+                let isStart = started.insert(best).inserted
+                segments.append(Segment(
+                    start: a, end: b, pitch: notes[best].pitch, noteIndex: best,
+                    isNoteStart: isStart, noteStart: notes[best].start
+                ))
             }
         }
         return segments
@@ -352,6 +383,8 @@ public struct MIDIFile: Sendable {
         var pitch: Int
         var noteIndex: Int
         var isNoteStart: Bool
+        /// Tick where the note itself began (the segment may begin later, once a higher note ends).
+        var noteStart: Int
     }
 
     struct Lyric: Sendable {

@@ -135,6 +135,23 @@ Runs on every push and PR:
   `AudioInput.setDetection`; graphs use `AudioInput.displayBounds`.
 - Reset data goes through confirmation dialogs in Settings only.
 
+## Robustness and privacy (step 6)
+
+- `AudioInput.acquire(_:needsMic:)`: `needsMic: false` is playback only (`.playback` session, no input tap, no
+  permission prompt); used by the key preview and the hold-drill reference tone. A mic client restarts the engine.
+- Anything with a song clock registers `AudioInput.addEngineStopListener` and pauses/cancels there: a restarted engine
+  has a new output timeline and has dropped scheduled audio. `GuideVoice.invalidateAnchor()` runs on every stop.
+  Resume only succeeds while audio is `.running` (`GameSession.resume()` returns Bool).
+- The mic is released on the results screen and outside an active calibration run; views release after `acquire`
+  if their task was cancelled; `HomeView` calls `releaseAll` when the stack is empty.
+- Song data stays inside `SongLimits` (importers throw, `song.json` decoding rejects); `clickTimes` is capped.
+- App JSON stores load with `JSONFileStore.loadOrQuarantine()` (a corrupt file is moved to `*.corrupt-<time>.json`,
+  newest two kept) and decode leniently (`lenient(_:forKey:)`, `Lossy<T>`); new fields need defaults.
+- Song folders are named by app-generated ids only (`SongLibraryStore.isSafeFolderName`); the folder name wins over
+  the id in `song.json`.
+- os_log mirror is `.private`; the log file leaves the phone only via Copy All (local-only, expires) or Share.
+  Erase everything also clears the logs; Logs has Clear.
+
 ## Versioning
 
 - `CFBundleShortVersionString` = marketing version; `CFBundleVersion` = integer build number.

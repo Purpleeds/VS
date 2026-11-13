@@ -30,12 +30,19 @@ final class LibraryModel: ObservableObject {
     let builtIns = BuiltInSongs.all
     private let store = SongLibraryStore(root: AppPaths.songsDirectory)
     private var midiQueue: [PendingMIDI] = []
+    /// An import report held back while MIDI track pickers are showing (an alert and a sheet can't appear
+    /// together); shown once the last picker closes.
+    private var deferredMessage: Message?
 
     static let songExtensions: Set<String> = ["txt", "mid", "midi", "kar"]
     static let audioExtensions: Set<String> = ["mp3", "m4a", "wav", "aac", "aif", "aiff", "caf"]
-    private static let maxSongFileBytes = 10 * 1_024 * 1_024
+    private static let maxSongFileBytes = 2 * 1_024 * 1_024
+    /// Temporary copies of audio picked with a song; wiped at launch and as soon as they're attached.
+    private static let importTempDirectory = FileManager.default.temporaryDirectory
+        .appendingPathComponent("PitchLaneImport", isDirectory: true)
 
     init() {
+        try? FileManager.default.removeItem(at: Self.importTempDirectory)
         reload()
     }
 
@@ -71,6 +78,12 @@ final class LibraryModel: ObservableObject {
             defer { if access { url.stopAccessingSecurityScopedResource() } }
             do {
                 if Self.songExtensions.contains(ext) {
+                    // Check the size before reading, so a huge file is never loaded into memory.
+                    let size = (try? url.resourceValues(forKeys: [.fileSizeKey]).fileSize) ?? 0
+                    guard size <= Self.maxSongFileBytes else {
+                        problems.append("\(name): file is too large for a song (\(size / 1_024) KB, limit \(Self.maxSongFileBytes / 1_024) KB)")
+                        continue
+                    }
                     let data = try Data(contentsOf: url)
                     guard data.count <= Self.maxSongFileBytes else {
                         problems.append("\(name): file is too large for a song (\(data.count / 1_024) KB)")
@@ -78,7 +91,8 @@ final class LibraryModel: ObservableObject {
                     }
                     songFiles.append((name, data))
                 } else if Self.audioExtensions.contains(ext) {
-                    let temp = FileManager.default.temporaryDirectory
+                    try FileManager.default.createDirectory(at: Self.importTempDirectory, withIntermediateDirectories: true)
+                    let temp = Self.importTempDirectory
                         .appendingPathComponent(UUID().uuidString)
                         .appendingPathExtension(ext)
                     try FileManager.default.copyItem(at: url, to: temp)
@@ -106,7 +120,7 @@ final class LibraryModel: ObservableObject {
                     let audioURL = audio ?? result.audioReference.flatMap { reference in
                         audioFiles.first { $0.name.caseInsensitiveCompare(reference) == .orderedSame }?.url
                     }
-                    try save(result.song, fileName: file.name, data: file.data, audio: audioURL)
+                    problems += try save(result.song, fileName: file.name, data: file.data, audio: audioURL)
                     importedTitles.append(result.song.title)
                     problems += result.warnings.map { "\(file.name): \($0)" }
                 } else {
@@ -115,7 +129,7 @@ final class LibraryModel: ObservableObject {
                     let playable = midi.tracks.filter { $0.noteCount > 0 }
                     if playable.count == 1, let only = playable.first {
                         let song = try midi.song(track: only.id, title: midi.title ?? title)
-                        try save(song, fileName: file.name, data: file.data, audio: audio)
+                        problems += try save(song, fileName: file.name, data: file.data, audio: audio)
                         importedTitles.append(song.title)
                     } else if playable.isEmpty {
                         throw SongImportError("MIDI file has no notes")
@@ -130,21 +144,43 @@ final class LibraryModel: ObservableObject {
             }
         }
 
+        // Temp audio copies are only kept while a queued MIDI import still needs them.
+        let stillNeeded = Set(midiQueue.compactMap(\.audio) + [pendingMIDI?.audio].compactMap { $0 })
+        for file in audioFiles where !stillNeeded.contains(file.url) {
+            try? FileManager.default.removeItem(at: file.url)
+        }
+
         reload()
         report(imported: importedTitles, problems: problems)
         presentNextMIDI()
     }
 
+    /// Shows the message now, or after the MIDI pickers if one is up or queued.
+    private func show(_ newMessage: Message) {
+        if pendingMIDI != nil || !midiQueue.isEmpty {
+            deferredMessage = newMessage
+        } else {
+            message = newMessage
+        }
+    }
+
+    private func discardTempAudio(_ url: URL?) {
+        guard let url else { return }
+        let stillNeeded = midiQueue.contains { $0.audio == url } || pendingMIDI?.audio == url
+        if !stillNeeded { try? FileManager.default.removeItem(at: url) }
+    }
+
     func chooseMIDITrack(_ track: Int) {
         guard let pending = pendingMIDI else { return }
         pendingMIDI = nil
+        defer { discardTempAudio(pending.audio) }
         let title = pending.file.title ?? URL(fileURLWithPath: pending.fileName).deletingPathExtension().lastPathComponent
         do {
             let song = try pending.file.song(track: track, title: title)
-            try save(song, fileName: pending.fileName, data: pending.data, audio: pending.audio)
+            let problems = try save(song, fileName: pending.fileName, data: pending.data, audio: pending.audio)
             AppLog.info("MIDI track \(track + 1) chosen for \(pending.fileName)", category: "library")
             reload()
-            report(imported: [song.title], problems: [])
+            report(imported: [song.title], problems: problems)
         } catch {
             let text = (error as? SongImportError)?.description ?? error.localizedDescription
             AppLog.warning("MIDI import failed for \(pending.fileName): \(text)", category: "library")
@@ -156,14 +192,20 @@ final class LibraryModel: ObservableObject {
     func cancelMIDIImport() {
         if let pending = pendingMIDI {
             AppLog.info("MIDI import cancelled for \(pending.fileName)", category: "library")
+            pendingMIDI = nil
+            discardTempAudio(pending.audio)
         }
-        pendingMIDI = nil
         presentNextMIDI()
     }
 
     private func presentNextMIDI() {
-        guard pendingMIDI == nil, !midiQueue.isEmpty else { return }
-        pendingMIDI = midiQueue.removeFirst()
+        guard pendingMIDI == nil else { return }
+        if !midiQueue.isEmpty {
+            pendingMIDI = midiQueue.removeFirst()
+        } else if let deferred = deferredMessage {
+            deferredMessage = nil
+            message = deferred
+        }
     }
 
     /// Audio chosen with the song: same base name, or the only audio file when only one song was picked.
@@ -175,11 +217,19 @@ final class LibraryModel: ObservableObject {
         return songFileCount == 1 && audio.count == 1 ? audio[0].url : nil
     }
 
-    private func save(_ song: Song, fileName: String, data: Data, audio: URL?) throws {
+    /// Saves the song, then attaches audio. A failed attach is a warning: the song itself was imported.
+    @discardableResult
+    private func save(_ song: Song, fileName: String, data: Data, audio: URL?) throws -> [String] {
         try store.save(song, originalFileName: fileName, originalData: data)
         var saved = song
+        var problems: [String] = []
         if let audio {
-            saved = try store.attachBackingAudio(from: audio, to: song)
+            do {
+                saved = try store.attachBackingAudio(from: audio, to: song)
+            } catch {
+                AppLog.warning("Backing audio for \(fileName) couldn't be attached: \(error.localizedDescription)", category: "library")
+                problems.append("\(fileName): imported, but the backing audio couldn't be added (\(error.localizedDescription)). Use Attach Backing Audio in the song's details.")
+            }
         }
         let summary = saved.summary
         AppLog.info(
@@ -187,6 +237,7 @@ final class LibraryModel: ObservableObject {
                 + "range \(summary.rangeText(accidentals: .sharps)), backing audio \(saved.backingAudioFile ?? "none")",
             category: "library"
         )
+        return problems
     }
 
     private func report(imported titles: [String], problems: [String]) {
@@ -199,7 +250,7 @@ final class LibraryModel: ObservableObject {
         } else {
             title = "Imported \(titles.count), with problems"
         }
-        message = Message(title: title, text: problems.isEmpty ? "Ready to sing." : problems.joined(separator: "\n\n"))
+        show(Message(title: title, text: problems.isEmpty ? "Ready to sing." : problems.joined(separator: "\n\n")))
     }
 
     // MARK: Edit
@@ -234,16 +285,31 @@ final class LibraryModel: ObservableObject {
         return ids
     }
 
-    func delete(_ song: Song) {
-        guard song.source != .builtIn else { return }
+    /// Erase everything: also removes folders that never loaded (corrupt or half-written imports).
+    func eraseSongStorage() {
+        do {
+            if FileManager.default.fileExists(atPath: AppPaths.songsDirectory.path) {
+                try FileManager.default.removeItem(at: AppPaths.songsDirectory)
+            }
+        } catch {
+            AppLog.error("Couldn't remove the songs folder: \(error.localizedDescription)", category: "library")
+        }
+        reload()
+    }
+
+    @discardableResult
+    func delete(_ song: Song) -> Bool {
+        guard song.source != .builtIn else { return false }
+        defer { reload() }
         do {
             try store.delete(id: song.id)
             AppLog.info("Deleted \"\(song.title)\"", category: "library")
+            return true
         } catch {
             AppLog.error("Delete failed for \(song.id): \(error.localizedDescription)", category: "library")
             message = Message(title: "Couldn't delete", text: error.localizedDescription)
+            return false
         }
-        reload()
     }
 }
 #endif

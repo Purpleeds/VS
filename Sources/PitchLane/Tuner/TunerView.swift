@@ -16,6 +16,7 @@ struct TunerView: View {
         .navigationBarTitleDisplayMode(.inline)
         .task {
             await audio.acquire("tuner")
+            if Task.isCancelled { audio.release("tuner") }
         }
         .onDisappear {
             audio.release("tuner")
@@ -162,10 +163,31 @@ struct TunerReadout: View {
     }
 }
 
-struct MicrophonePermissionView: View {
-    @Environment(\.openURL) private var openURL
+/// Centres short content, and scrolls it when it doesn't fit (landscape, large Dynamic Type).
+struct CenteredScroll<Content: View>: View {
+    @ViewBuilder var content: Content
 
     var body: some View {
+        GeometryReader { geo in
+            ScrollView {
+                content
+                    .frame(maxWidth: .infinity, minHeight: geo.size.height)
+            }
+            .scrollBounceBehavior(.basedOnSize)
+        }
+    }
+}
+
+struct MicrophonePermissionView: View {
+    @Environment(\.openURL) private var openURL
+    /// Optional second button (e.g. leave the game).
+    var onBack: (() -> Void)?
+
+    var body: some View {
+        CenteredScroll { card }
+    }
+
+    private var card: some View {
         VStack(spacing: 16) {
             Image(systemName: "mic.slash.fill")
                 .font(.system(size: 48))
@@ -188,6 +210,9 @@ struct MicrophonePermissionView: View {
                     .padding(.horizontal, 8)
             }
             .buttonStyle(.borderedProminent)
+            if let onBack {
+                Button("Back", action: onBack).buttonStyle(.bordered)
+            }
         }
         .padding(24)
         .frame(maxWidth: 420)
@@ -197,8 +222,13 @@ struct MicrophonePermissionView: View {
 struct AudioFailedView: View {
     let message: String
     let retry: () -> Void
+    var onBack: (() -> Void)?
 
     var body: some View {
+        CenteredScroll { card }
+    }
+
+    private var card: some View {
         VStack(spacing: 16) {
             Image(systemName: "exclamationmark.triangle.fill")
                 .font(.system(size: 44))
@@ -210,8 +240,13 @@ struct AudioFailedView: View {
                 .font(.callout)
                 .multilineTextAlignment(.center)
                 .foregroundStyle(Theme.textSecondary)
-            Button("Try again", action: retry)
-                .buttonStyle(.borderedProminent)
+            HStack {
+                Button("Try again", action: retry)
+                    .buttonStyle(.borderedProminent)
+                if let onBack {
+                    Button("Back", action: onBack).buttonStyle(.bordered)
+                }
+            }
         }
         .padding(24)
         .frame(maxWidth: 420)

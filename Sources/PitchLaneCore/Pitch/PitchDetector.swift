@@ -162,6 +162,33 @@ public final class PitchDetector {
                     }
                 }
 
+                // Still descending at the longest lag: the true period is longer than the range allows (a note
+                // below the lowest pitch). Report unvoiced instead of snapping to the bottom note.
+                if best == maxLag - 1 && c[maxLag] < c[best] {
+                    let confidence = min(1, max(0, 1 - Double(c[best])))
+                    return PitchEstimate(frequency: nil, confidence: confidence, rms: rms)
+                }
+
+                // Subharmonic check: in noise the true dip can sit just above the threshold, so the first dip
+                // found is at 2-4x the period (an octave or more too low). Prefer a clear local minimum near
+                // best/k when it is nearly as deep.
+                if best >= minLag {
+                    let limit = min(Float(0.30), c[best] + 0.04)
+                    var chosen = best
+                    for k in 2...4 {
+                        let centre = Int((Double(best) / Double(k)).rounded())
+                        if centre - 2 < minLag { break }
+                        var j = centre - 2
+                        for candidate in (centre - 2)...(centre + 2) where c[candidate] < c[j] {
+                            j = candidate
+                        }
+                        if c[j] <= c[j - 1], c[j] <= c[j + 1], c[j] <= limit {
+                            chosen = j
+                        }
+                    }
+                    best = chosen
+                }
+
                 let value = Double(c[best])
                 let confidence = min(1, max(0, 1 - value))
                 if best < minLag {

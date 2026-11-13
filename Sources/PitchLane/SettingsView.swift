@@ -25,7 +25,7 @@ private enum ResetKind: Identifiable {
         case .scores: return "Personal bests, play history and stats are deleted."
         case .latency: return "Calibration and fine-tuning for every output (speaker, wired, Bluetooth) are removed."
         case .songs: return "Imported songs, their backing audio and their scores are deleted. Built-in songs stay."
-        case .everything: return "Settings, range, scores, history, latency calibration and imported songs are all deleted. This can't be undone."
+        case .everything: return "Settings, range, scores, history, latency calibration, imported songs and the logs are all deleted. This can't be undone."
         }
     }
 
@@ -123,6 +123,19 @@ struct SettingsView: View {
                 Toggle("Debug overlay", isOn: $model.settings.debugOverlay)
             }
 
+            Section {
+                Label("Your voice is analysed live on this phone and is never recorded, saved or uploaded.",
+                      systemImage: "mic.slash")
+                Label("Scores, settings, songs and logs stay on this phone. Logs leave it only if you copy or share them.",
+                      systemImage: "lock")
+                Label("The microphone is only on during the tuner, games, practice and calibration; the orange dot shows when.",
+                      systemImage: "circle.fill")
+            } header: {
+                Text("Privacy")
+            }
+            .font(.footnote)
+            .foregroundStyle(Theme.textSecondary)
+
             Section("Developer") {
                 NavigationLink(value: Route.logs) {
                     Label("Logs", systemImage: "doc.text.magnifyingglass")
@@ -181,6 +194,8 @@ struct SettingsView: View {
             scores.resetAll()
             latency.resetAll()
             deleteSongs()
+            library.eraseSongStorage()
+            AppLog.clear()
         }
     }
 

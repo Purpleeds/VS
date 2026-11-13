@@ -37,6 +37,29 @@ public struct GameRecord: Codable, Sendable, Equatable, Identifiable {
         self.transpose = transpose
     }
 
+    private enum CodingKeys: String, CodingKey {
+        case id, songID, songTitle, difficulty, date, score, accuracy, grade, maxCombo, practice, speed, failed, transpose
+    }
+
+    /// Forgiving: only the song id is required; anything missing or unreadable gets a default.
+    public init(from decoder: Decoder) throws {
+        let c = try decoder.container(keyedBy: CodingKeys.self)
+        id = c.lenient(UUID.self, forKey: .id) ?? UUID()
+        songID = try c.decode(String.self, forKey: .songID)
+        songTitle = c.lenient(String.self, forKey: .songTitle) ?? ""
+        difficulty = c.lenient(Difficulty.self, forKey: .difficulty) ?? .normal
+        date = c.lenient(Date.self, forKey: .date) ?? Date(timeIntervalSince1970: 0)
+        score = c.lenient(Int.self, forKey: .score) ?? 0
+        let accuracy = c.lenient(Double.self, forKey: .accuracy) ?? 0
+        self.accuracy = accuracy.isFinite ? min(1, max(0, accuracy)) : 0
+        grade = c.lenient(Grade.self, forKey: .grade) ?? Grade(accuracy: self.accuracy)
+        maxCombo = c.lenient(Int.self, forKey: .maxCombo) ?? 0
+        practice = c.lenient(Bool.self, forKey: .practice) ?? false
+        speed = c.lenient(Double.self, forKey: .speed) ?? 1
+        failed = c.lenient(Bool.self, forKey: .failed) ?? false
+        transpose = c.lenient(Int.self, forKey: .transpose) ?? 0
+    }
+
     public init(result: GameResult, practice: PracticeOptions, failed: Bool, transpose: Int) {
         self.init(
             songID: result.songID, songTitle: result.songTitle, difficulty: result.difficulty, date: result.date,
@@ -70,6 +93,15 @@ public struct GameHistory: Codable, Sendable, Equatable {
     public private(set) var records: [GameRecord] = []
 
     public init() {}
+
+    private enum CodingKeys: String, CodingKey { case records }
+
+    /// Skips unreadable records instead of failing the whole history.
+    public init(from decoder: Decoder) throws {
+        let c = try decoder.container(keyedBy: CodingKeys.self)
+        let lossy = (try? c.decodeIfPresent([Lossy<GameRecord>].self, forKey: .records)) ?? nil
+        records = Array((lossy ?? []).compactMap(\.value).suffix(Self.maxRecords))
+    }
 
     public mutating func add(_ record: GameRecord) {
         records.append(record)

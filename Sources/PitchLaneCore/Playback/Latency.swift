@@ -43,6 +43,16 @@ public struct RouteLatency: Codable, Sendable, Equatable {
         self.calibratedAt = calibratedAt
     }
 
+    private enum CodingKeys: String, CodingKey { case calibrationMs, nudgeMs, calibratedAt }
+
+    public init(from decoder: Decoder) throws {
+        let c = try decoder.container(keyedBy: CodingKeys.self)
+        calibrationMs = c.lenient(Double.self, forKey: .calibrationMs).flatMap { $0.isFinite ? max(-1_000, min(1_000, $0)) : nil }
+        let nudge = c.lenient(Double.self, forKey: .nudgeMs) ?? 0
+        nudgeMs = nudge.isFinite ? max(-300, min(300, nudge)) : 0
+        calibratedAt = c.lenient(Date.self, forKey: .calibratedAt)
+    }
+
     public var correctionMs: Double { (calibrationMs ?? 0) + nudgeMs }
     public var isCalibrated: Bool { calibrationMs != nil }
 }
@@ -52,6 +62,33 @@ public struct LatencyProfiles: Codable, Sendable, Equatable {
     public private(set) var routes: [AudioRouteKind: RouteLatency] = [:]
 
     public init() {}
+
+    private enum CodingKeys: String, CodingKey { case routes }
+
+    /// Written as `{"routes": {"speaker": {...}}}`. Also reads the older alternating-array form
+    /// (`["speaker", {...}, ...]`). Unknown routes and unreadable entries are skipped.
+    public init(from decoder: Decoder) throws {
+        let c = try decoder.container(keyedBy: CodingKeys.self)
+        var routes: [AudioRouteKind: RouteLatency] = [:]
+        if let keyed = (try? c.decodeIfPresent([String: Lossy<RouteLatency>].self, forKey: .routes)) ?? nil {
+            for (name, entry) in keyed {
+                if let route = AudioRouteKind(rawValue: name), let value = entry.value { routes[route] = value }
+            }
+        } else if var list = try? c.nestedUnkeyedContainer(forKey: .routes) {
+            while !list.isAtEnd {
+                guard let name = try? list.decode(String.self) else { break }
+                guard let entry = try? list.decode(Lossy<RouteLatency>.self) else { break }
+                if let route = AudioRouteKind(rawValue: name), let value = entry.value { routes[route] = value }
+            }
+        }
+        self.routes = routes
+    }
+
+    public func encode(to encoder: Encoder) throws {
+        var c = encoder.container(keyedBy: CodingKeys.self)
+        let keyed = Dictionary(uniqueKeysWithValues: routes.map { ($0.key.rawValue, $0.value) })
+        try c.encode(keyed, forKey: .routes)
+    }
 
     public subscript(route: AudioRouteKind) -> RouteLatency {
         routes[route] ?? RouteLatency()

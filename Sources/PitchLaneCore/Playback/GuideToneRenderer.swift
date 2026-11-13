@@ -85,13 +85,15 @@ public final class GuideToneRenderer: @unchecked Sendable {
         cachedPitch = .nan
     }
 
-    /// Renders `frameCount` mono samples. `songTime` is the song time of the first sample; when `advancing`
-    /// is false (paused, countdown hold) time stands still and the output fades to silence.
+    /// Renders `frameCount` mono samples. `songTime` is the song time of the first sample and song time advances
+    /// `rate` song-seconds per output second (practice speed; pitch is unaffected). When `advancing` is false
+    /// (paused, countdown hold) time stands still and the output fades to silence.
     public func render(
         into out: UnsafeMutablePointer<Float>,
         frameCount: Int,
         sampleRate: Double,
         songTime: Double,
+        rate: Double = 1,
         advancing: Bool,
         volume: Float
     ) {
@@ -99,9 +101,10 @@ public final class GuideToneRenderer: @unchecked Sendable {
         // ~3 ms one-pole smoothing on the gain: declicks pauses and volume changes.
         let smoothing = Float(1 - exp(-1 / (0.003 * sampleRate)))
         let step = 1 / sampleRate
+        let songStep = step * (rate.isFinite && rate > 0 ? rate : 1)
         let level = max(0, min(1, volume))
         for i in 0..<frameCount {
-            let t = advancing ? songTime + Double(i) * step : songTime
+            let t = advancing ? songTime + Double(i) * songStep : songTime
             var targetGain: Float = 0
             var pitch = cachedPitch.isNaN ? 69 : cachedPitch
             if advancing, level > 0, let sound = evaluate(at: t) {

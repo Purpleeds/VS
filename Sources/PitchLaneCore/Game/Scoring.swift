@@ -278,6 +278,27 @@ public struct PersonalBest: Codable, Sendable, Equatable {
     public var grade: Grade
     public var maxCombo: Int
     public var date: Date
+
+    public init(score: Int, accuracy: Double, grade: Grade, maxCombo: Int, date: Date) {
+        self.score = score
+        self.accuracy = accuracy
+        self.grade = grade
+        self.maxCombo = maxCombo
+        self.date = date
+    }
+
+    private enum CodingKeys: String, CodingKey { case score, accuracy, grade, maxCombo, date }
+
+    /// Forgiving: the score is required; other fields fall back to defaults.
+    public init(from decoder: Decoder) throws {
+        let c = try decoder.container(keyedBy: CodingKeys.self)
+        score = try c.decode(Int.self, forKey: .score)
+        let accuracy = c.lenient(Double.self, forKey: .accuracy) ?? 0
+        self.accuracy = accuracy.isFinite ? min(1, max(0, accuracy)) : 0
+        grade = c.lenient(Grade.self, forKey: .grade) ?? Grade(accuracy: self.accuracy)
+        maxCombo = c.lenient(Int.self, forKey: .maxCombo) ?? 0
+        date = c.lenient(Date.self, forKey: .date) ?? Date(timeIntervalSince1970: 0)
+    }
 }
 
 /// Best score per song and difficulty, persisted as JSON.
@@ -285,6 +306,15 @@ public struct PersonalBests: Codable, Sendable, Equatable {
     public private(set) var records: [String: PersonalBest] = [:]
 
     public init() {}
+
+    private enum CodingKeys: String, CodingKey { case records }
+
+    /// Skips unreadable entries instead of failing the whole file.
+    public init(from decoder: Decoder) throws {
+        let c = try decoder.container(keyedBy: CodingKeys.self)
+        let lossy = (try? c.decodeIfPresent([String: Lossy<PersonalBest>].self, forKey: .records)) ?? nil
+        records = (lossy ?? [:]).compactMapValues(\.value)
+    }
 
     public static func key(songID: String, difficulty: Difficulty) -> String {
         "\(songID)|\(difficulty.rawValue)"

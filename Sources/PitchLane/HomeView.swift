@@ -33,6 +33,7 @@ enum Route: Hashable {
 
 struct HomeView: View {
     @State private var path: [Route] = []
+    @EnvironmentObject private var audio: AudioInput
 
     var body: some View {
         NavigationStack(path: $path) {
@@ -96,6 +97,7 @@ struct HomeView: View {
         }
         .tint(Theme.accent)
         .onChange(of: path) { _, newPath in
+            if newPath.isEmpty { audio.releaseAll(reason: "back on the home screen") }
             AppLog.info("Navigation: \(newPath.map(\.name).joined(separator: " > "))", category: "ui")
         }
     }

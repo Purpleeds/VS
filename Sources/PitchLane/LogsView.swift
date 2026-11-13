@@ -1,10 +1,12 @@
 #if canImport(SwiftUI)
 import SwiftUI
 import UIKit
+import UniformTypeIdentifiers
 
 struct LogsView: View {
     @State private var text = ""
     @State private var copied = false
+    @State private var confirmClear = false
 
     var body: some View {
         ScrollView {
@@ -24,7 +26,16 @@ struct LogsView: View {
                 Button("Refresh", systemImage: "arrow.clockwise") { reload() }
                 Button(copied ? "Copied" : "Copy All", systemImage: "doc.on.doc") { copyAll() }
                 ShareLink("Share", item: text)
+                Button("Clear", systemImage: "trash", role: .destructive) { confirmClear = true }
             }
+        }
+        .confirmationDialog("Clear the logs?", isPresented: $confirmClear, titleVisibility: .visible) {
+            Button("Clear Logs", role: .destructive) {
+                AppLog.clear()
+                reload()
+            }
+        } message: {
+            Text("Deletes the previous and current session logs from this phone.")
         }
         .onAppear { reload() }
     }
@@ -35,7 +46,11 @@ struct LogsView: View {
 
     private func copyAll() {
         reload()
-        UIPasteboard.general.string = text
+        // Local only (not Universal Clipboard) and expires, so the log doesn't linger on other devices.
+        UIPasteboard.general.setItems(
+            [[UTType.utf8PlainText.identifier: text]],
+            options: [.localOnly: true, .expirationDate: Date().addingTimeInterval(600)]
+        )
         AppLog.info("Logs copied to clipboard (\(text.count) chars)", category: "ui")
         copied = true
         Task {

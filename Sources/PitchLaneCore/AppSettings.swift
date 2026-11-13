@@ -112,22 +112,22 @@ public struct AppSettings: Codable, Equatable, Sendable {
 
     public init(from decoder: Decoder) throws {
         let container = try decoder.container(keyedBy: CodingKeys.self)
-        self.debugOverlay = try container.decodeIfPresent(Bool.self, forKey: .debugOverlay) ?? false
-        self.accidentals = (try? container.decodeIfPresent(Accidentals.self, forKey: .accidentals)) ?? .sharps
-        self.lastDifficulty = (try? container.decodeIfPresent(Difficulty.self, forKey: .lastDifficulty)) ?? .normal
-        self.octaveAgnostic = try container.decodeIfPresent(Bool.self, forKey: .octaveAgnostic) ?? true
-        self.clickTrack = try container.decodeIfPresent(Bool.self, forKey: .clickTrack) ?? false
-        self.showNoteNames = try container.decodeIfPresent(Bool.self, forKey: .showNoteNames) ?? false
-        self.guideVolume = min(1, max(0, try container.decodeIfPresent(Double.self, forKey: .guideVolume) ?? 0.6))
-        self.backingVolume = min(1, max(0, try container.decodeIfPresent(Double.self, forKey: .backingVolume) ?? 0.8))
-        self.guideOnEasyNormal = try container.decodeIfPresent(Bool.self, forKey: .guideOnEasyNormal) ?? true
-        self.guideOnHard = try container.decodeIfPresent(Bool.self, forKey: .guideOnHard) ?? false
-        self.vocalRange = try? container.decodeIfPresent(VocalRange.self, forKey: .vocalRange)
-        self.songTranspose = (try? container.decodeIfPresent([String: Int].self, forKey: .songTranspose)) ?? [:]
-        let gate = try container.decodeIfPresent(Double.self, forKey: .noiseGateDBFS) ?? -50
+        self.debugOverlay = container.lenient(Bool.self, forKey: .debugOverlay) ?? false
+        self.accidentals = (container.lenient(Accidentals.self, forKey: .accidentals)) ?? .sharps
+        self.lastDifficulty = (container.lenient(Difficulty.self, forKey: .lastDifficulty)) ?? .normal
+        self.octaveAgnostic = container.lenient(Bool.self, forKey: .octaveAgnostic) ?? true
+        self.clickTrack = container.lenient(Bool.self, forKey: .clickTrack) ?? false
+        self.showNoteNames = container.lenient(Bool.self, forKey: .showNoteNames) ?? false
+        self.guideVolume = min(1, max(0, container.lenient(Double.self, forKey: .guideVolume) ?? 0.6))
+        self.backingVolume = min(1, max(0, container.lenient(Double.self, forKey: .backingVolume) ?? 0.8))
+        self.guideOnEasyNormal = container.lenient(Bool.self, forKey: .guideOnEasyNormal) ?? true
+        self.guideOnHard = container.lenient(Bool.self, forKey: .guideOnHard) ?? false
+        self.vocalRange = container.lenient(VocalRange.self, forKey: .vocalRange)
+        self.songTranspose = (container.lenient([String: Int].self, forKey: .songTranspose)) ?? [:]
+        let gate = container.lenient(Double.self, forKey: .noiseGateDBFS) ?? -50
         self.noiseGateDBFS = min(Self.noiseGateRange.upperBound, max(Self.noiseGateRange.lowerBound, gate))
-        self.instrumentMode = try container.decodeIfPresent(Bool.self, forKey: .instrumentMode) ?? false
-        self.showFPS = try container.decodeIfPresent(Bool.self, forKey: .showFPS) ?? false
-        self.failEnabled = try container.decodeIfPresent(Bool.self, forKey: .failEnabled) ?? true
+        self.instrumentMode = container.lenient(Bool.self, forKey: .instrumentMode) ?? false
+        self.showFPS = container.lenient(Bool.self, forKey: .showFPS) ?? false
+        self.failEnabled = container.lenient(Bool.self, forKey: .failEnabled) ?? true
     }
 }

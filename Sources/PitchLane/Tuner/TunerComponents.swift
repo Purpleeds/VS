@@ -44,7 +44,12 @@ struct CentsNeedle: View {
             .foregroundStyle(Theme.textSecondary)
         }
         .accessibilityElement(children: .ignore)
-        .accessibilityLabel(cents.map { String(format: "%+.0f cents", $0) } ?? "No pitch")
+        .accessibilityLabel("Tuning")
+        .accessibilityValue(cents.map { c in
+            let rounded = Int(c.rounded())
+            return rounded == 0 ? "in tune" : "\(abs(rounded)) cents \(rounded > 0 ? "sharp" : "flat")"
+        } ?? "No pitch")
+        .accessibilityAddTraits(.updatesFrequently)
     }
 
     static func color(for cents: Double) -> Color {

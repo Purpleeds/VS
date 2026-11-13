@@ -50,8 +50,10 @@ struct RootView: View {
                     Task { await audio.enterForeground() }
                 case .inactive:
                     AppLog.info("Scene inactive", category: "lifecycle")
+                    settings.flush()
                 case .background:
                     AppLog.info("Scene background (marking clean exit)", category: "lifecycle")
+                    settings.flush()
                     audio.enterBackground()
                     AppLog.markCleanExit()
                 @unknown default:

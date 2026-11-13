@@ -35,9 +35,16 @@ public struct StreamingResampler: Sendable {
         var t = position
         var prev = previous
         for x in input {
-            var y = x
+            // A single NaN/Inf would poison the filter state for good: treat it as silence and reset.
+            var y = x.isFinite ? x : 0
             if filtering {
                 y = f2.process(f1.process(f0.process(y)))
+                if !y.isFinite {
+                    f0.reset()
+                    f1.reset()
+                    f2.reset()
+                    y = 0
+                }
             }
             while t < 1 {
                 output.append(prev + (y - prev) * Float(t))

@@ -27,6 +27,7 @@ struct LibraryView: View {
     @State private var query = ""
     @State private var selection: LibrarySelection?
     @State private var showImporter = false
+    @State private var pendingDelete: Song?
 
     static let importTypes: [UTType] = {
         var types: [UTType] = [.plainText, .midi, .mp3, .mpeg4Audio, .wav, .aiff, .audio]
@@ -43,11 +44,9 @@ struct LibraryView: View {
             builtInSection(title: "Melodies", kinds: BuiltInKind.allCases.filter { !$0.isExercise })
             if !library.loadFailures.isEmpty {
                 Section("Couldn't load") {
-                    ForEach(library.loadFailures, id: \.folderName) { failure in
-                        Text("\(failure.folderName): \(failure.message)")
-                            .font(.caption)
-                            .foregroundStyle(Theme.textSecondary)
-                    }
+                    Text("\(library.loadFailures.count == 1 ? "A song" : "\(library.loadFailures.count) songs") couldn't be read (the file may be damaged). The details are in Settings > Logs; Erase everything in Settings removes them.")
+                        .font(.footnote)
+                        .foregroundStyle(Theme.textSecondary)
                 }
             }
         }
@@ -67,6 +66,7 @@ struct LibraryView: View {
                 library.importFiles(urls)
             case .failure(let error):
                 AppLog.warning("File picker failed: \(error.localizedDescription)", category: "library")
+                library.message = .init(title: "Couldn't open Files", text: error.localizedDescription)
             }
         }
         .sheet(item: $selection) { selection in
@@ -77,15 +77,27 @@ struct LibraryView: View {
         }
         .alert(
             library.message?.title ?? "",
-            isPresented: Binding(get: { library.message != nil }, set: { if !$0 { library.message = nil } }),
+            // While the song sheet is up, it shows the message itself (an alert can't appear behind a sheet).
+            isPresented: Binding(get: { library.message != nil && selection == nil }, set: { if !$0 { library.message = nil } }),
             presenting: library.message
         ) { _ in
             Button("OK") { library.message = nil }
         } message: { message in
             Text(message.text)
         }
-        .onChange(of: query) { _, newValue in
-            if !newValue.isEmpty { AppLog.debug("Library search \"\(newValue)\"", category: "library") }
+        .confirmationDialog(
+            "Delete \"\(pendingDelete?.title ?? "")\"?",
+            isPresented: Binding(get: { pendingDelete != nil }, set: { if !$0 { pendingDelete = nil } }),
+            titleVisibility: .visible,
+            presenting: pendingDelete
+        ) { song in
+            Button("Delete", role: .destructive) {
+                // Delete first: if that fails, the scores stay with the song.
+                if library.delete(song) { scores.forget(songID: song.id) }
+                pendingDelete = nil
+            }
+        } message: { _ in
+            Text("The song, its backing audio, scores and history are removed from this phone.")
         }
     }
 
@@ -124,10 +136,7 @@ struct LibraryView: View {
                 }
             }
             .onDelete { offsets in
-                for index in offsets {
-                    scores.forget(songID: songs[index].id)
-                    library.delete(songs[index])
-                }
+                if let index = offsets.first { pendingDelete = songs[index] }
             }
         }
     }
@@ -211,6 +220,7 @@ struct SongDetailSheet: View {
     @State private var practice = PracticeOptions.normal
     @State private var showAudioImporter = false
     @State private var confirmDelete = false
+    @StateObject private var preview = TransposePreview()
 
     private var song: Song? {
         switch selection {
@@ -238,13 +248,27 @@ struct SongDetailSheet: View {
             }
         }
         .presentationDetents([.medium, .large])
+        .onDisappear { preview.stop() }
         .onAppear {
             difficulty = settings.settings.lastDifficulty
             shift = settings.settings.transpose(for: shiftKey)
             AppLog.info("Song details opened: \(selection.id)", category: "library")
         }
         .onChange(of: difficulty) { _, _ in
-            practice = PracticeOptions(speed: practice.speed, noFail: practice.noFail)
+            // Built-ins are different songs per difficulty, so their loop points no longer apply. Imported songs
+            // are the same notes at every difficulty: keep the loop (and the toggle stays in sync).
+            if case .builtIn = selection {
+                practice = PracticeOptions(speed: practice.speed, noFail: practice.noFail)
+            }
+        }
+        .alert(
+            library.message?.title ?? "",
+            isPresented: Binding(get: { library.message != nil }, set: { if !$0 { library.message = nil } }),
+            presenting: library.message
+        ) { _ in
+            Button("OK") { library.message = nil }
+        } message: { message in
+            Text(message.text)
         }
         .onChange(of: shift) { _, newValue in
             settings.settings.setTranspose(newValue, for: shiftKey)
@@ -301,7 +325,7 @@ struct SongDetailSheet: View {
                 }
             }
             if onPlay != nil {
-                TransposeSection(song: song, shift: $shift)
+                TransposeSection(song: song, shift: $shift, preview: preview)
                 PracticeSection(song: song, practice: $practice)
                     .id(song.id)
                 Section("Game options") {
@@ -317,6 +341,7 @@ struct SongDetailSheet: View {
             if let onPlay {
                 Section {
                     Button {
+                        preview.stop()
                         settings.settings.lastDifficulty = difficulty
                         onPlay(song, GamePlan(difficulty: difficulty, transpose: shift, practice: practice))
                     } label: {
@@ -342,8 +367,7 @@ struct SongDetailSheet: View {
         }
         .confirmationDialog("Delete \"\(song.title)\"?", isPresented: $confirmDelete, titleVisibility: .visible) {
             Button("Delete", role: .destructive) {
-                scores.forget(songID: song.id)
-                library.delete(song)
+                if library.delete(song) { scores.forget(songID: song.id) }
                 dismiss()
             }
         }

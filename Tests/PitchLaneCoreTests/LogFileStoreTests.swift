@@ -124,4 +124,21 @@ final class LogFileStoreTests: XCTestCase {
         store.append(.error, category: "t", "after delete")
         XCTAssertTrue(text(store.currentURL).contains("after delete"))
     }
+
+    func testClearRemovesBothSessionsButKeepsCleanExitDetection() {
+        let a = makeStore()
+        a.beginSession()
+        a.append(.info, category: "t", "old secret")
+        a.markClean()
+        let b = makeStore()
+        b.beginSession()
+        b.append(.info, category: "t", "new secret")
+        b.clear()
+        XCTAssertFalse(FileManager.default.fileExists(atPath: b.previousURL.path))
+        XCTAssertFalse(b.readAll().contains("secret"))
+        b.append(.info, category: "t", "after clear")
+        XCTAssertTrue(text(b.currentURL).contains("after clear"))
+        // Session state survives: this session is still "running", so the next launch reports unclean.
+        XCTAssertEqual(makeStore().beginSession(), .endedUncleanly)
+    }
 }

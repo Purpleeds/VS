@@ -30,25 +30,34 @@ struct GameView: View {
             Theme.lane.ignoresSafeArea()
             if let result = session.result {
                 ResultsView(session: session, result: result, accidentals: settings.settings.accidentals) {
-                    session.restart()
+                    Task {
+                        await audio.acquire("game")
+                        session.restart()
+                    }
                 } onDone: {
                     dismiss()
                 }
-            } else if let problem = audioProblem {
-                AudioProblemView(message: problem, onRetry: { Task { await audio.retry() } }, onQuit: { dismiss() })
+            } else if audio.state == .permissionDenied {
+                // Same explanation + Settings link as the other mic screens.
+                MicrophonePermissionView(onBack: { dismiss() })
+            } else if case .failed(let message) = audio.state {
+                AudioFailedView(message: message, retry: { Task { await audio.retry() } }, onBack: { dismiss() })
             } else {
                 lane
                 GameHUD(session: session) { session.pause(reason: "pause button") }
                 if settings.settings.showFPS {
                     FPSBadge()
                 }
-                if showRouteWarning, let warning = routeWarning {
+                if let problem = session.backingProblem {
+                    RouteWarningBanner(text: problem, symbol: "music.note") { session.backingProblem = nil }
+                } else if showRouteWarning, let warning = routeWarning {
                     RouteWarningBanner(text: warning) { showRouteWarning = false }
                 }
                 if session.phase == .paused {
                     PauseMenu(
                         session: session,
-                        onResume: { session.resume() },
+                        audioReady: audio.state == .running,
+                        onResume: { _ = session.resume() },
                         onRestart: { session.restart() },
                         onQuit: { dismiss() }
                     )
@@ -57,10 +66,16 @@ struct GameView: View {
         }
         .lockOrientation(.landscape)
         .toolbar(.hidden, for: .navigationBar)
+        // No swipe-back mid-song: leaving goes through Pause > Quit or the results screen.
+        .navigationBarBackButtonHidden(true)
         .statusBarHidden()
         .persistentSystemOverlays(.hidden)
         .task {
             await audio.acquire("game")
+            if Task.isCancelled {
+                audio.release("game")
+                return
+            }
             if audio.state == .running, !started {
                 started = true
                 session.begin(audio: audio, scores: scores, backingURL: backingURL)
@@ -77,11 +92,20 @@ struct GameView: View {
                 session.pause(reason: "audio \(state)")
             }
         }
+        .onChange(of: session.result != nil) { _, showingResults in
+            // The microphone isn't needed on the results screen: let the recording indicator go away.
+            if showingResults { audio.release("game") }
+        }
         .onChange(of: scenePhase) { _, phase in
             if phase != .active { session.pause(reason: "app \(phase == .background ? "backgrounded" : "inactive")") }
         }
         .onChange(of: audio.routeKind) { _, _ in
             showRouteWarning = true
+        }
+        .task(id: session.backingProblem) {
+            guard session.backingProblem != nil else { return }
+            try? await Task.sleep(for: .seconds(8))
+            session.backingProblem = nil
         }
         .task(id: showRouteWarning) {
             guard showRouteWarning else { return }
@@ -109,14 +133,6 @@ struct GameView: View {
         }
     }
 
-    private var audioProblem: String? {
-        switch audio.state {
-        case .permissionDenied: return "Microphone access is off. Turn it on in Settings > PitchLane to play."
-        case .failed(let message): return "The microphone couldn't start: \(message)"
-        default: return nil
-        }
-    }
-
     private var lane: some View {
         TimelineView(.animation(minimumInterval: nil, paused: session.phase == .paused || session.phase == .finished)) { _ in
             Canvas { context, size in
@@ -136,6 +152,9 @@ struct GameView: View {
             }
         }
         .ignoresSafeArea()
+        .accessibilityElement()
+        .accessibilityLabel("Note lane")
+        .accessibilityValue("Score \(session.score), accuracy \(Int((session.accuracy * 100).rounded())) percent")
     }
 }
 
@@ -148,6 +167,7 @@ struct GameHUD: View {
             HStack(alignment: .top) {
                 VStack(alignment: .leading, spacing: 2) {
                     Text("\(session.score)")
+                        .accessibilityLabel("Score \(session.score)")
                         .font(.system(size: 30, weight: .heavy, design: .rounded))
                         .monospacedDigit()
                         .foregroundStyle(Theme.textPrimary)
@@ -233,7 +253,9 @@ struct EnergyBar: View {
                     .animation(.easeOut(duration: 0.2), value: value)
             }
         }
-        .accessibilityLabel("Energy \(Int((value * 100).rounded())) percent")
+        .accessibilityElement()
+        .accessibilityLabel("Energy")
+        .accessibilityValue("\(Int((value * 100).rounded())) percent")
     }
 }
 
@@ -261,6 +283,8 @@ struct FPSBadge: View {
 
 struct PauseMenu: View {
     @ObservedObject var session: GameSession
+    /// Resume needs a running engine (after a call or a route change it can take a moment to come back).
+    let audioReady: Bool
     let onResume: () -> Void
     let onRestart: () -> Void
     let onQuit: () -> Void
@@ -270,25 +294,50 @@ struct PauseMenu: View {
     var body: some View {
         ZStack {
             Color.black.opacity(0.55).ignoresSafeArea()
-            HStack(alignment: .top, spacing: 28) {
+            CenteredScroll { card }
+        }
+        .accessibilityAddTraits(.isModal)
+    }
+
+    private var card: some View {
+            ViewThatFits(in: .horizontal) {
+                HStack(alignment: .top, spacing: 28) { buttons; controls }
+                VStack(spacing: 20) { buttons; controls }
+            }
+            .padding(26)
+            .background(Theme.surface, in: RoundedRectangle(cornerRadius: 20, style: .continuous))
+            .padding(12)
+    }
+
+    private var buttons: some View {
                 VStack(spacing: 14) {
                     Text("Paused")
                         .font(.largeTitle.weight(.heavy))
                         .foregroundStyle(Theme.textPrimary)
                     Button(action: onResume) {
-                        Label("Resume", systemImage: "play.fill").frame(width: 190)
+                        Label("Resume", systemImage: "play.fill").frame(minWidth: 190)
                     }
                     .buttonStyle(.borderedProminent)
+                    .disabled(!audioReady)
+                    if !audioReady {
+                        Text("Waiting for audio…")
+                            .font(.footnote)
+                            .foregroundStyle(Theme.textSecondary)
+                    }
                     Button(action: onRestart) {
-                        Label("Restart", systemImage: "arrow.counterclockwise").frame(width: 190)
+                        Label("Restart", systemImage: "arrow.counterclockwise").frame(minWidth: 190)
                     }
                     .buttonStyle(.bordered)
+                    .disabled(!audioReady)
                     Button(role: .destructive, action: onQuit) {
-                        Label("Quit", systemImage: "xmark").frame(width: 190)
+                        Label("Quit", systemImage: "xmark").frame(minWidth: 190)
                     }
                     .buttonStyle(.bordered)
                 }
                 .controlSize(.large)
+    }
+
+    private var controls: some View {
                 VStack(alignment: .leading, spacing: 12) {
                     Toggle("Guide tone", isOn: Binding(
                         get: { session.guideOn },
@@ -315,12 +364,8 @@ struct PauseMenu: View {
                         ))
                     }
                 }
-                .frame(width: 240)
+                .frame(minWidth: 220, maxWidth: 280)
                 .foregroundStyle(Theme.textPrimary)
-            }
-            .padding(26)
-            .background(Theme.surface, in: RoundedRectangle(cornerRadius: 20, style: .continuous))
-        }
     }
 }
 
@@ -344,13 +389,14 @@ struct VolumeSlider: View {
 
 struct RouteWarningBanner: View {
     let text: String
+    var symbol = "headphones"
     let onDismiss: () -> Void
 
     var body: some View {
         VStack {
             Spacer()
             HStack(spacing: 10) {
-                Image(systemName: "headphones")
+                Image(systemName: symbol)
                 Text(text)
                     .font(.footnote.weight(.medium))
                     .fixedSize(horizontal: false, vertical: true)
@@ -367,42 +413,22 @@ struct RouteWarningBanner: View {
     }
 }
 
-struct AudioProblemView: View {
-    let message: String
-    let onRetry: () -> Void
-    let onQuit: () -> Void
-
-    var body: some View {
-        VStack(spacing: 14) {
-            Image(systemName: "mic.slash.fill")
-                .font(.system(size: 40))
-                .foregroundStyle(Theme.accentSecondary)
-            Text(message)
-                .multilineTextAlignment(.center)
-                .foregroundStyle(Theme.textPrimary)
-                .frame(maxWidth: 420)
-            HStack {
-                Button("Try again", action: onRetry).buttonStyle(.borderedProminent)
-                Button("Back", action: onQuit).buttonStyle(.bordered)
-            }
-        }
-        .padding(24)
-    }
-}
-
 struct ResultsView: View {
     @ObservedObject var session: GameSession
     let result: GameResult
     let accidentals: Accidentals
     let onAgain: () -> Void
     let onDone: () -> Void
+    @ScaledMetric(relativeTo: .largeTitle) private var gradeSize: CGFloat = 72
 
     var body: some View {
         HStack(spacing: 20) {
+            // Scrolls at large text sizes so "Sing again" / "Done" are always reachable in landscape.
+            ScrollView {
             VStack(alignment: .leading, spacing: 10) {
                 HStack(alignment: .firstTextBaseline, spacing: 14) {
                     Text(result.grade.rawValue)
-                        .font(.system(size: 72, weight: .black, design: .rounded))
+                        .font(.system(size: gradeSize, weight: .black, design: .rounded))
                         .foregroundStyle(gradeColor)
                     VStack(alignment: .leading, spacing: 2) {
                         Text("\(result.score)")
@@ -458,7 +484,10 @@ struct ResultsView: View {
                 }
                 .controlSize(.large)
             }
-            .frame(maxWidth: 360, alignment: .leading)
+            .frame(maxWidth: .infinity, alignment: .leading)
+            }
+            .scrollBounceBehavior(.basedOnSize)
+            .frame(maxWidth: 360)
             ReplayGraph(session: session, accidentals: accidentals)
         }
         .padding(20)
@@ -487,7 +516,9 @@ struct ReplayGraph: View {
             }
         }
         .background(Theme.surface.opacity(0.5), in: RoundedRectangle(cornerRadius: 14, style: .continuous))
+        .accessibilityElement()
         .accessibilityLabel("Replay of your pitch over the song")
+        .accessibilityValue("\(Int((session.result?.accuracy ?? session.accuracy) * 100)) percent accuracy")
     }
 
     private func draw(_ context: inout GraphicsContext, size: CGSize) {

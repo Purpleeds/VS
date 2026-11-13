@@ -139,6 +139,21 @@ public final class LogFileStore: @unchecked Sendable {
         return text
     }
 
+    /// Deletes the previous-session log and empties the current one (Settings > reset, Logs > Clear).
+    /// The session state file is kept so clean-exit detection keeps working.
+    public func clear() {
+        lock.lock(); defer { lock.unlock() }
+        let fileManager = FileManager.default
+        try? fileManager.removeItem(at: previousURL)
+        do {
+            try fileManager.createDirectory(at: directory, withIntermediateDirectories: true)
+            try Data().write(to: currentURL, options: .atomic)
+        } catch {
+            lastErrorStorage = "clear failed: \(error)"
+        }
+        currentSize = 0
+    }
+
     // MARK: - Private (lock must be held)
 
     private func appendLocked(_ data: Data) {

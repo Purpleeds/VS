@@ -47,7 +47,14 @@ final class HoldDrillModel: ObservableObject {
     }
 
     func receive(_ batch: PitchAnalyzer.Batch) {
-        guard let last = batch.frames.last else { return }
+        guard let first = batch.frames.first, let last = batch.frames.last else { return }
+        // An engine restart (route change, headphones) restarts the analyser's stream clock near 0: shift the
+        // drill's start by the jump so the countdown and hold carry on instead of waiting forever.
+        if first.time < streamNow - 0.5 {
+            let jump = first.time - streamNow
+            startStream += jump
+            AppLog.info("Hold drill: audio stream restarted (\(String(format: "%.1f", jump)) s), shifting the drill clock", category: "drill")
+        }
         streamNow = last.time
         liveMIDI = last.midi
         switch phase {
@@ -130,6 +137,7 @@ struct HoldDrillView: View {
             }
             audio.addFrameListener("drill") { batch, _ in model.receive(batch) }
             await audio.acquire("drill")
+            if Task.isCancelled { audio.release("drill") }
         }
         .onDisappear {
             tone.stop()

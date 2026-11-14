@@ -326,3 +326,19 @@ Online, with listening on; search "sakura" for a さくら title.
 ### Phone checklist
 A Korean song (romanization, e.g. 사랑해 sa-rang-hae), a Chinese song (pinyin with tones); Romanized + original;
 home screen look and Reduce Motion; level/streak after a run; grade badges in the Library.
+
+## 12. Words by listening, saved transcripts (done)
+
+- A video **or audio file** picked on its own becomes a song: notes from the singing (`MelodyTranscriber`), then
+  (Settings > "Write lyrics for new songs by listening", default on) its words by on-device speech recognition.
+- Every listen is saved as `transcript.json` in the song folder (Core `SongTranscript`: language, source voice/mix,
+  each word's start and length). Words go on the notes they were heard over (`SongTranscript.lyricLines` →
+  `LyricAligner`, word times win); Japanese/Korean/Chinese words are split into morae/syllables/characters first.
+- Song sheet > **Words by listening**: Write Lyrics by Listening / Use Heard Words / **Edit Heard Words…** (each line
+  with its time and length; corrected words share the line's span) / **Listen Again** (redo), with a language picker
+  (Automatic picks the song's script, else the phone's language). Timing other lyrics by listening reuses the saved
+  words. New backing audio deletes stale transcripts.
+
+### Phone checklist
+Import an mp3 alone (notes, then words; progress shows both stages); open the song: Heard N words; Edit Heard Words,
+fix a line, Save (lane updates); Listen Again in another language; Settings toggle off → new imports skip words.

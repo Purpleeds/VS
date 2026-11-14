@@ -35,12 +35,16 @@ struct RootView: View {
     @Environment(\.scenePhase) private var scenePhase
     @EnvironmentObject private var settings: SettingsModel
     @EnvironmentObject private var audio: AudioInput
+    @EnvironmentObject private var library: LibraryModel
 
     var body: some View {
         HomeView()
             .modifier(DebugOverlay(enabled: settings.settings.debugOverlay))
             .onChange(of: settings.settings.pipelineConfiguration(), initial: true) { _, configuration in
                 audio.setDetection(configuration)
+            }
+            .onChange(of: settings.settings.autoLyrics, initial: true) { _, on in
+                library.autoLyrics = on
             }
             .onChange(of: scenePhase) { _, phase in
                 switch phase {

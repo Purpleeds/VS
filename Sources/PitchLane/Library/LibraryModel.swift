@@ -32,12 +32,18 @@ final class LibraryModel: ObservableObject {
         var title: String
         var progress: Double
         var queued: Int
+        /// What is happening now ("Writing notes from the singing", "Recognising the words").
+        var stage: String = "Writing notes from the singing"
     }
 
     @Published private(set) var transcription: Transcription?
     @Published private(set) var songJob: SongJob?
     private var songJobTask: Task<Void, Never>?
     private var transcriptionQueue: [(url: URL, title: String)] = []
+    /// Saved heard words per song id (`transcript.json`), loaded with the library.
+    @Published private(set) var transcripts: [String: SongTranscript] = [:]
+    /// Mirrors Settings > "Write lyrics for new songs by listening".
+    var autoLyrics = true
     private var transcriptionTask: Task<Void, Never>?
 
     let builtIns = BuiltInSongs.all
@@ -80,6 +86,11 @@ final class LibraryModel: ObservableObject {
             if !parts.isEmpty { names[song.id] = parts.joined(separator: " ") }
         }
         romajiNames = names
+        var heard: [String: SongTranscript] = [:]
+        for song in result.songs {
+            if let transcript = store.loadTranscript(for: song) { heard[song.id] = transcript }
+        }
+        transcripts = heard
         loadFailures = result.failures
         for failure in result.failures {
             AppLog.error("Couldn't load song folder \(failure.folderName): \(failure.message)", category: "library")
@@ -142,15 +153,13 @@ final class LibraryModel: ObservableObject {
             }
         }
 
-        // Videos picked without a song file become new songs, transcribed from their singing.
+        // Videos and audio files picked without a song file become new songs: notes from the singing, and (unless
+        // turned off) words by listening.
         var transcribing: Set<URL> = []
         if songFiles.isEmpty {
-            for file in audioFiles where videoCopies.contains(file.url) {
+            for file in audioFiles {
                 transcribing.insert(file.url)
                 transcriptionQueue.append((file.url, URL(fileURLWithPath: file.name).deletingPathExtension().lastPathComponent))
-            }
-            if audioFiles.contains(where: { !videoCopies.contains($0.url) }) {
-                problems.append("Audio files need a song: pick them together with a .txt or MIDI file, or use Attach Backing Audio in a song's details.")
             }
         }
 
@@ -236,7 +245,8 @@ final class LibraryModel: ObservableObject {
     private func transcribe(_ job: (url: URL, title: String)) async {
         defer { try? FileManager.default.removeItem(at: job.url) }
         let started = Date()
-        AppLog.info("Transcribing a video (\(job.url.pathExtension))", category: "library")
+        let isVideo = VideoTools.isVideo(job.url)
+        AppLog.info("Transcribing \(isVideo ? "a video" : "an audio file") (\(job.url.pathExtension))", category: "library")
         do {
             let notes = try await VideoTools.transcribe(job.url) { [weak self] fraction in
                 Task { @MainActor in self?.transcription?.progress = fraction }
@@ -246,7 +256,7 @@ final class LibraryModel: ObservableObject {
                 AppLog.warning("Transcription found \(notes.count) notes", category: "library")
                 show(Message(
                     title: "No singing found",
-                    text: "PitchLane couldn't hear a clear sung melody in \"\(job.title)\". Videos of one voice (with little music behind it) work best."
+                    text: "PitchLane couldn't hear a clear sung melody in \"\(job.title)\". Recordings of one voice (with little music behind it) work best."
                 ))
                 return
             }
@@ -258,23 +268,41 @@ final class LibraryModel: ObservableObject {
                 lineBreaks: MelodyTranscriber.lineBreaks(for: notes)
             )
             try store.save(song)
-            let withVideo = try store.attachVideo(from: job.url, to: song)
-            let backingProblem = await extractBacking(for: withVideo)
+            var made = song
+            var backingProblem: String?
+            if isVideo {
+                made = try store.attachVideo(from: job.url, to: song)
+                backingProblem = await extractBacking(for: made)
+            } else {
+                made = try store.attachBackingAudio(from: job.url, to: song)
+            }
             reload()
-            let summary = withVideo.summary
+            let summary = made.summary
             AppLog.info(
-                "Made \"\(song.title)\" from a video: \(notes.count) notes, \(summary.durationText), range \(summary.rangeText(accidentals: .sharps)), "
-                    + "\(String(format: "%.1f", Date().timeIntervalSince(started))) s",
+                "Made \"\(song.title)\" from \(isVideo ? "a video" : "audio"): \(notes.count) notes, \(summary.durationText), "
+                    + "range \(summary.rangeText(accidentals: .sharps)), \(String(format: "%.1f", Date().timeIntervalSince(started))) s",
                 category: "library"
             )
-            var text = "\(notes.count) notes from the singing (\(summary.rangeText(accidentals: .sharps))). The video plays behind the lane and its sound is the backing track.\n\nAdd the words with Find Lyrics Online in the song's details. Transcriptions are rough, especially with music behind the voice; try it in Practice first."
+            var text = "\(notes.count) notes from the singing (\(summary.rangeText(accidentals: .sharps)))."
+                + (isVideo ? " The video plays behind the lane and its sound is the backing track." : " The file is the backing track.")
             if let backingProblem { text += "\n\n" + backingProblem }
+            if autoLyrics, backingProblem == nil {
+                transcription?.stage = "Recognising the words"
+                transcription?.progress = 0
+                let words = await listenAndFit(songID: song.id, language: nil) { [weak self] fraction in
+                    Task { @MainActor in self?.transcription?.progress = fraction }
+                }
+                text += "\n\n" + words
+            } else {
+                text += "\n\nAdd the words in the song's details: Write Lyrics by Listening, Find Lyrics Online, or type them."
+            }
+            text += "\n\nEverything was worked out on this phone and is rough, especially with music behind the voice: check it in Practice, and use Listen Again or Edit Heard Words to fix mistakes."
             show(Message(title: "Made \"\(song.title)\"", text: text))
         } catch is CancellationError {
             AppLog.info("Transcription cancelled", category: "library")
         } catch {
             AppLog.warning("Transcription failed: \(error.localizedDescription)", category: "library")
-            show(Message(title: "Couldn't make a song from the video", text: error.localizedDescription))
+            show(Message(title: "Couldn't make a song from \"\(job.title)\"", text: error.localizedDescription))
         }
     }
 
@@ -498,7 +526,15 @@ final class LibraryModel: ObservableObject {
         } else {
             hints = Array(Set(words.map { $0.lowercased().trimmingCharacters(in: .punctuationCharacters) }.filter { $0.count > 2 })).sorted()
         }
-        let locale = script.speechLocaleIdentifier.map { Locale(identifier: $0) } ?? Locale.current
+        let languageID = script.speechLocaleIdentifier ?? listeningLanguage(for: current, chosen: nil)
+        let locale = Locale(identifier: languageID)
+        // Heard words are saved: reuse them instead of listening again (Listen Again in the sheet refreshes them).
+        if let saved = transcripts[song.id], !saved.isEmpty, Self.sameLanguage(saved.language, languageID) {
+            AppLog.info("Timing lyrics with the saved heard words (\(saved.words.count))", category: "lyrics")
+            finishLyrics(synced: synced, plain: plain, credit: credit, songID: song.id, heard: saved.words, listenProblem: nil)
+            return
+        }
+        let source = current.hasStems ? "voice" : "mix"
         songJob = SongJob(songID: song.id, title: "Listening to the song to time the words…", progress: 0)
         AppLog.info("Listening to a song to time \(words.count) lyric words (\(current.hasStems ? "voice stem" : "full mix"))", category: "lyrics")
         songJobTask = Task { [weak self] in
@@ -515,8 +551,25 @@ final class LibraryModel: ObservableObject {
                 problem = error.localizedDescription
                 AppLog.warning("Listening for lyrics failed: \(error.localizedDescription)", category: "lyrics")
             }
+            if let heard, !heard.isEmpty {
+                self?.remember(SongTranscript(language: languageID, source: source, words: heard), for: song.id)
+            }
             self?.endSongJob()
             self?.finishLyrics(synced: synced, plain: plain, credit: credit, songID: song.id, heard: heard, listenProblem: problem)
+        }
+    }
+
+    private static func sameLanguage(_ a: String, _ b: String) -> Bool {
+        a.replacingOccurrences(of: "_", with: "-").lowercased() == b.replacingOccurrences(of: "_", with: "-").lowercased()
+    }
+
+    private func remember(_ transcript: SongTranscript, for songID: String) {
+        guard let song = imported.first(where: { $0.id == songID }) else { return }
+        do {
+            try store.saveTranscript(transcript, for: song)
+            transcripts[songID] = transcript
+        } catch {
+            AppLog.warning("Heard words couldn't be saved: \(error.localizedDescription)", category: "lyrics")
         }
     }
 
@@ -611,6 +664,110 @@ final class LibraryModel: ObservableObject {
         } catch {
             message = Message(title: "Couldn't save the lyrics", text: error.localizedDescription)
         }
+    }
+
+    // MARK: Words by listening (no lyrics file needed)
+
+    /// Speech recognition languages offered for listening (all on-device when the phone supports them).
+    static let listeningLanguages: [(name: String, id: String?)] = [
+        ("Automatic", nil), ("English (US)", "en-US"), ("English (UK)", "en-GB"), ("Japanese", "ja-JP"), ("Korean", "ko-KR"),
+        ("Chinese (Mandarin)", "zh-CN"), ("Cantonese", "zh-HK"), ("Spanish", "es-ES"), ("French", "fr-FR"), ("German", "de-DE"),
+        ("Italian", "it-IT"), ("Portuguese", "pt-BR"),
+    ]
+
+    /// The language to listen in: the chosen one, else the saved transcript's, else the script of the song's words
+    /// or title, else the phone's language.
+    func listeningLanguage(for song: Song, chosen: String?) -> String {
+        if let chosen { return chosen }
+        if let saved = transcripts[song.id]?.language, !saved.isEmpty { return saved }
+        let script = LyricScript.detect(song.notes.map(\.lyric) + [song.title, song.artist])
+        return script.speechLocaleIdentifier ?? Locale.current.identifier.replacingOccurrences(of: "_", with: "-")
+    }
+
+    /// Listens to the whole song, saves the heard words with their times and lengths, and puts them on the notes.
+    /// Returns a sentence for the user.
+    private func listenAndFit(songID: String, language: String?, progress: @escaping @Sendable (Double) -> Void) async -> String {
+        guard let song = imported.first(where: { $0.id == songID }) else { return "" }
+        let stems = store.stemURLs(for: song)
+        guard let audio = stems?.vocals ?? store.backingAudioURL(for: song) else { return "The song has no audio to listen to." }
+        let languageID = listeningLanguage(for: song, chosen: language)
+        AppLog.info("Listening for words (\(languageID), \(stems != nil ? "voice stem" : "full mix"))", category: "lyrics")
+        do {
+            let hints = Array(Set(song.title.split(whereSeparator: \.isWhitespace).map(String.init).filter { $0.count > 2 })).sorted()
+            let heard = try await SongListener.heardWords(in: audio, locale: Locale(identifier: languageID), hints: hints, progress: progress)
+            let transcript = SongTranscript(language: languageID, source: stems != nil ? "voice" : "mix", words: heard)
+            try store.saveTranscript(transcript, for: song)
+            transcripts[song.id] = transcript
+            AppLog.info("Heard \(transcript.words.count) words (\(transcript.lines().count) lines)", category: "lyrics")
+            guard !transcript.isEmpty else {
+                return "No words could be recognised. Try Separate Voice and Music first, or another listening language."
+            }
+            return applyTranscript(transcript, to: song.id)
+        } catch is CancellationError {
+            return "Listening was cancelled."
+        } catch {
+            AppLog.warning("Listening for words failed: \(error.localizedDescription)", category: "lyrics")
+            return "The words couldn't be recognised (\(error.localizedDescription))."
+        }
+    }
+
+    /// Puts saved heard words on the notes they were heard over. Returns a sentence for the user.
+    @discardableResult
+    private func applyTranscript(_ transcript: SongTranscript, to songID: String) -> String {
+        guard let current = imported.first(where: { $0.id == songID }) else { return "" }
+        let script = LyricScript.detect(transcript.words.map(\.text))
+        let units = LyricRomanizer.units(transcript.words, script: script)
+        let lines = SongTranscript.lyricLines(from: units)
+        let result = LyricAligner.apply(lines: lines, to: current, autoOffset: false)
+        guard result.wordsPlaced > 0 else { return "The heard words didn't line up with any notes." }
+        var updated = result.song
+        let languageName = Self.listeningLanguages.first { $0.id == transcript.language }?.name ?? transcript.language
+        updated.lyricsCredit = SongLimits.clip("Heard by PitchLane (\(languageName)\(transcript.edited ? ", edited" : ""))")
+        do {
+            try store.save(updated)
+            reload()
+        } catch {
+            return "The words couldn't be saved (\(error.localizedDescription))."
+        }
+        AppLog.info("Heard words fitted: \(result.wordsPlaced) units on \(result.notesWithWords)/\(current.notes.count) notes", category: "lyrics")
+        return "Heard \(transcript.words.count) words and put them on \(result.notesWithWords) of \(current.notes.count) notes."
+    }
+
+    /// Song sheet: "Write Lyrics by Listening" / "Listen Again".
+    func listenForWords(_ song: Song, language: String?) {
+        guard songJobTask == nil else { return }
+        songJob = SongJob(songID: song.id, title: "Listening to the song for its words…", progress: 0)
+        songJobTask = Task { [weak self] in
+            let text = await self?.listenAndFit(songID: song.id, language: language) { [weak self] fraction in
+                Task { @MainActor in self?.songJob?.progress = fraction }
+            } ?? ""
+            self?.endSongJob()
+            self?.message = Message(title: "Words by listening", text: text + " Use Edit Heard Words to fix mistakes, or Listen Again.")
+        }
+    }
+
+    /// Song sheet: put the saved heard words back on the notes (e.g. after trying other lyrics).
+    func useHeardWords(_ song: Song) {
+        guard let transcript = transcripts[song.id] else { return }
+        message = Message(title: "Heard words", text: applyTranscript(transcript, to: song.id))
+    }
+
+    /// Saves hand-corrected heard words and puts them on the notes.
+    func saveEditedTranscript(_ transcript: SongTranscript, for song: Song) {
+        do {
+            try store.saveTranscript(transcript, for: song)
+            transcripts[song.id] = transcript
+            AppLog.info("Heard words edited (\(transcript.words.count) words)", category: "lyrics")
+            message = Message(title: "Words updated", text: applyTranscript(transcript, to: song.id))
+        } catch {
+            message = Message(title: "Couldn't save the words", text: error.localizedDescription)
+        }
+    }
+
+    func forgetHeardWords(_ song: Song) {
+        store.deleteTranscript(for: song)
+        transcripts[song.id] = nil
+        AppLog.info("Heard words deleted", category: "lyrics")
     }
 
     // MARK: Voice and music

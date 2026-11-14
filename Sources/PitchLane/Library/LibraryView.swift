@@ -307,6 +307,8 @@ struct SongDetailSheet: View {
     @State private var showPaste = false
     @State private var pastedLyrics: String?
     @State private var listenForTiming = true
+    @State private var listeningLanguage: String?
+    @State private var editingTranscript: SongTranscript?
     @State private var confirmRemoveStems = false
     @State private var confirmDelete = false
     @StateObject private var preview = TransposePreview()
@@ -460,6 +462,9 @@ struct SongDetailSheet: View {
                 }
             }
             if song.source != .builtIn {
+                if song.backingAudioFile != nil {
+                    heardWordsSection(song)
+                }
                 lyricsSection(song)
                 if song.backingAudioFile != nil {
                     voiceAndMusicSection(song)
@@ -476,6 +481,13 @@ struct SongDetailSheet: View {
                 JobCard(title: job.title, progress: job.progress) { library.cancelSongJob() }
                     .padding(.horizontal, 16)
                     .padding(.bottom, 8)
+            }
+        }
+        .sheet(item: Binding(get: { editingTranscript.map { TranscriptEdit(transcript: $0) } }, set: { editingTranscript = $0?.transcript })) { edit in
+            TranscriptEditorSheet(transcript: edit.transcript) { updated in
+                library.saveEditedTranscript(updated, for: song)
+            } onForget: {
+                library.forgetHeardWords(song)
             }
         }
         .sheet(isPresented: $showPaste, onDismiss: {
@@ -526,6 +538,42 @@ struct SongDetailSheet: View {
         }) else { return nil }
         let text = first.map { display.primary[$0] }.filter { !$0.isEmpty }.joined(separator: " ")
         return text.isEmpty ? nil : String(text.prefix(80))
+    }
+
+    /// Words recognised from the song itself: no lyrics file needed. Saved for next time; redo or edit when wrong.
+    @ViewBuilder
+    private func heardWordsSection(_ song: Song) -> some View {
+        let busy = library.songJob != nil
+        let transcript = library.transcripts[song.id]
+        Section {
+            if let transcript, !transcript.isEmpty {
+                LabeledContent("Heard", value: "\(transcript.words.count) words, \(transcript.lines().count) lines\(transcript.edited ? ", edited" : "")")
+                LabeledContent("When", value: transcript.createdAt.formatted(date: .abbreviated, time: .shortened))
+                Button("Use Heard Words", systemImage: "text.badge.checkmark") { library.useHeardWords(song) }
+                    .disabled(busy)
+                Button("Edit Heard Words…", systemImage: "pencil") { editingTranscript = transcript }
+                    .disabled(busy)
+                Button("Listen Again", systemImage: "arrow.clockwise") { library.listenForWords(song, language: listeningLanguage) }
+                    .disabled(busy)
+            } else {
+                Button("Write Lyrics by Listening", systemImage: "waveform.badge.mic") { library.listenForWords(song, language: listeningLanguage) }
+                    .disabled(busy)
+            }
+            Picker("Language", selection: $listeningLanguage) {
+                ForEach(LibraryModel.listeningLanguages, id: \.name) { option in
+                    Text(option.id == nil ? "Automatic (\(Self.languageName(library.listeningLanguage(for: song, chosen: nil))))" : option.name)
+                        .tag(option.id)
+                }
+            }
+        } header: {
+            Text("Words by listening")
+        } footer: {
+            Text("PitchLane listens to the whole song\(song.hasStems ? " (its separated voice)" : "") with speech recognition on this phone, remembers every word with when it starts and how long it lasts, and puts the words on the notes. It's saved for next time. Singing over music is hard to recognise: separating the voice first helps, and you can fix lines by hand.")
+        }
+    }
+
+    private static func languageName(_ id: String) -> String {
+        LibraryModel.listeningLanguages.first { $0.id == id }?.name ?? id
     }
 
     @ViewBuilder
@@ -697,7 +745,7 @@ struct TranscriptionCard: View {
                     .lineLimit(1)
                 ProgressView(value: job.progress)
                     .tint(Theme.accent)
-                Text(job.queued > 0 ? "\(Int(job.progress * 100))% · \(job.queued) more queued" : "\(Int(job.progress * 100))% · writing notes from the singing")
+                Text("\(Int(job.progress * 100))% · \(job.stage.lowercased())\(job.queued > 0 ? " · \(job.queued) more queued" : "")")
                     .font(.caption)
                     .foregroundStyle(Theme.textSecondary)
             }
@@ -786,6 +834,93 @@ struct PasteLyricsSheet: View {
                 }
             }
         }
+    }
+}
+/// Wraps a transcript for `.sheet(item:)`.
+struct TranscriptEdit: Identifiable {
+    let transcript: SongTranscript
+    var id: Date { transcript.createdAt }
+}
+
+/// Fix the heard words line by line: each line shows when it's sung and how long it lasts.
+struct TranscriptEditorSheet: View {
+    let onSave: (SongTranscript) -> Void
+    let onForget: () -> Void
+
+    @Environment(\.dismiss) private var dismiss
+    @State private var transcript: SongTranscript
+    @State private var texts: [Int: String] = [:]
+    @State private var confirmForget = false
+
+    init(transcript: SongTranscript, onSave: @escaping (SongTranscript) -> Void, onForget: @escaping () -> Void) {
+        self.onSave = onSave
+        self.onForget = onForget
+        _transcript = State(initialValue: transcript)
+    }
+
+    var body: some View {
+        let lines = transcript.lines()
+        NavigationStack {
+            List {
+                Section {
+                    ForEach(lines) { line in
+                        VStack(alignment: .leading, spacing: 4) {
+                            Text("\(Self.clock(line.start)) · \(String(format: "%.1f", line.end - line.start)) s")
+                                .font(.caption.monospacedDigit().weight(.semibold))
+                                .foregroundStyle(Theme.accent)
+                            TextField("Words", text: Binding(
+                                get: { texts[line.firstWord] ?? line.text },
+                                set: { texts[line.firstWord] = $0 }
+                            ), axis: .vertical)
+                            .font(.body)
+                        }
+                        .padding(.vertical, 2)
+                    }
+                } footer: {
+                    Text("Correct any line, or clear it to remove its words. Corrected words share their line's time evenly.")
+                }
+                Section {
+                    Button("Forget Heard Words", systemImage: "trash", role: .destructive) { confirmForget = true }
+                }
+            }
+            .navigationTitle("Heard Words")
+            .navigationBarTitleDisplayMode(.inline)
+            .toolbar {
+                ToolbarItem(placement: .cancellationAction) {
+                    Button("Cancel") { dismiss() }
+                }
+                ToolbarItem(placement: .confirmationAction) {
+                    Button("Save") {
+                        onSave(applyEdits(to: lines))
+                        dismiss()
+                    }
+                    .disabled(texts.isEmpty)
+                }
+            }
+            .confirmationDialog("Forget the heard words?", isPresented: $confirmForget, titleVisibility: .visible) {
+                Button("Forget", role: .destructive) {
+                    onForget()
+                    dismiss()
+                }
+            } message: {
+                Text("The words already on the notes stay until you add other lyrics. Listen again any time.")
+            }
+        }
+    }
+
+    /// Applies edits from the last line backwards, so earlier word indices stay valid.
+    private func applyEdits(to lines: [SongTranscript.Line]) -> SongTranscript {
+        var result = transcript
+        for line in lines.reversed() {
+            guard let text = texts[line.firstWord], text != line.text else { continue }
+            result = result.replacingLine(line, with: text)
+        }
+        return result
+    }
+
+    private static func clock(_ seconds: Double) -> String {
+        let total = Int(max(0, seconds))
+        return "\(total / 60):\(String(format: "%02d", total % 60))"
     }
 }
 #endif

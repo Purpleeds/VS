@@ -194,6 +194,12 @@ Runs on every push and PR:
   Chinese by character (`LyricScript.units`). Korean romanization is Core (`Hangul`); Chinese pinyin comes from the
   system tokenizer/transform in the app (`ChineseText`). `LyricRomanizer` (app) chooses by `LyricScript.detect`.
 
+## Words by listening (step 12)
+
+- Heard words are a saved `SongTranscript` (`transcript.json`, via `SongLibraryStore`), never sent anywhere; reuse it
+  instead of listening again, replace it on Listen Again, and delete it when the backing audio changes.
+- Placement goes through `SongTranscript.lyricLines` + `LyricAligner` (word times), after `LyricRomanizer.units` for CJK.
+
 ## Menu look (step 11)
 
 - Menus use `GameUI.swift` (`GameBackdrop`, `ChunkyButtonStyle`, `GameTile`, `GradeBadge`, `NeonTitle`, `PlayerCard`).

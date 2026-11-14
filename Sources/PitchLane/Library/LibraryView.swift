@@ -396,9 +396,9 @@ struct SongDetailSheet: View {
                     if let credit = song.lyricsCredit {
                         LabeledContent("Lyrics", value: credit)
                     }
-                    if JapaneseText.songHasJapanese(song) {
-                        Picker("Japanese lyrics", selection: $settings.settings.japaneseLyrics) {
-                            ForEach(JapaneseLyricsMode.allCases) { mode in
+                    if LyricScript.detect(song) != .other {
+                        Picker("\(LyricScript.detect(song).languageName) lyrics", selection: $settings.settings.romanizedLyrics) {
+                            ForEach(RomanizedLyricsMode.allCases) { mode in
                                 Text(mode.displayName).tag(mode)
                             }
                         }
@@ -499,9 +499,9 @@ struct SongDetailSheet: View {
         }
     }
 
-    /// The first lyric line as the lane will show it in romaji.
+    /// The first lyric line as the lane will show it romanized.
     private func romajiPreview(_ song: Song) -> String? {
-        let display = JapaneseText.display(for: song, mode: .romaji)
+        let display = LyricRomanizer.display(for: song, mode: .romanized)
         guard let first = JapaneseRomanizer.lineGroups(for: song).first(where: { group in
             group.contains { !display.primary[$0].isEmpty }
         }) else { return nil }

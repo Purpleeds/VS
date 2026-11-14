@@ -66,8 +66,8 @@ struct SettingsView: View {
                 Toggle("Songs can be failed", isOn: $model.settings.failEnabled)
                 Toggle("Click track", isOn: $model.settings.clickTrack)
                 Toggle("Song videos behind the lane", isOn: $model.settings.showVideo)
-                Picker("Japanese lyrics", selection: $model.settings.japaneseLyrics) {
-                    ForEach(JapaneseLyricsMode.allCases) { mode in
+                Picker("Japanese, Korean & Chinese lyrics", selection: $model.settings.romanizedLyrics) {
+                    ForEach(RomanizedLyricsMode.allCases) { mode in
                         Text(mode.displayName).tag(mode)
                     }
                 }

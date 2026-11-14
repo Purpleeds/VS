@@ -76,7 +76,7 @@ final class LibraryModel: ObservableObject {
         imported = result.songs
         var names: [String: String] = [:]
         for song in result.songs {
-            let parts = [JapaneseText.romaji(song.title), JapaneseText.romaji(song.artist)].compactMap { $0 }
+            let parts = [LyricRomanizer.romanize(song.title), LyricRomanizer.romanize(song.artist)].compactMap { $0 }
             if !parts.isEmpty { names[song.id] = parts.joined(separator: " ") }
         }
         romajiNames = names
@@ -489,16 +489,16 @@ final class LibraryModel: ObservableObject {
             return
         }
         let words = lyricLines(synced: synced, plain: plain).flatMap { $0 }
-        let japanese = Kana.containsJapanese(synced ?? plain ?? "")
+        let script = LyricScript.detect([synced ?? plain ?? ""])
         let hints: [String]
-        if japanese {
-            // Whole words help the Japanese recogniser more than single morae.
+        if script != .other {
+            // Whole words help the Japanese, Korean or Chinese recogniser more than single syllables.
             let text = (synced.map { LRCParser.parse($0).map(\.text).joined(separator: "\n") } ?? plain) ?? ""
-            hints = Array(Set(JapaneseText.tokens(text).map(\.text).filter { $0.count > 1 })).sorted()
+            hints = Array(Set(LyricRomanizer.hintWords(text, script: script))).sorted()
         } else {
             hints = Array(Set(words.map { $0.lowercased().trimmingCharacters(in: .punctuationCharacters) }.filter { $0.count > 2 })).sorted()
         }
-        let locale = japanese ? Locale(identifier: "ja-JP") : Locale.current
+        let locale = script.speechLocaleIdentifier.map { Locale(identifier: $0) } ?? Locale.current
         songJob = SongJob(songID: song.id, title: "Listening to the song to time the words…", progress: 0)
         AppLog.info("Listening to a song to time \(words.count) lyric words (\(current.hasStems ? "voice stem" : "full mix"))", category: "lyrics")
         songJobTask = Task { [weak self] in
@@ -527,29 +527,30 @@ final class LibraryModel: ObservableObject {
             if lines.count >= 2 { return lines }
         }
         let text = plain ?? synced ?? ""
-        guard Kana.containsJapanese(text) else { return LyricListenMatcher.lines(from: text) }
+        let script = LyricScript.detect([text])
+        guard script != .other else { return LyricListenMatcher.lines(from: text) }
         return text.split(whereSeparator: \.isNewline)
             .map { $0.trimmingCharacters(in: .whitespaces) }
             .filter { !$0.isEmpty && !($0.hasPrefix("[") && $0.hasSuffix("]")) }
-            .map { JapaneseText.morae($0) }
+            .map { LyricRomanizer.units($0, script: script) }
             .filter { !$0.isEmpty }
     }
 
-    /// Timed lines with Japanese text become lines of morae (no word times; spread over the line's notes).
+    /// Timed lines in Japanese, Korean or Chinese become lines of sung units (morae / syllables / characters), with
+    /// no word times, spread over the line's notes.
     private func japaneseAware(_ lines: [LyricLine]) -> [LyricLine] {
-        lines.map { line in
-            guard Kana.containsJapanese(line.text) else { return line }
-            return LyricLine(time: line.time, text: line.text, words: JapaneseText.morae(line.text).map { LyricLine.Word(time: nil, text: $0) })
+        let script = LyricScript.detect(lines.map(\.text))
+        guard script != .other else { return lines }
+        return lines.map { line in
+            guard line.text.unicodeScalars.contains(where: LyricScript.isSyllabic) else { return line }
+            return LyricLine(time: line.time, text: line.text,
+                             words: LyricRomanizer.units(line.text, script: script).map { LyricLine.Word(time: nil, text: $0) })
         }
     }
 
-    /// Heard Japanese words become timed morae, so they match the lyric morae one to one.
+    /// Heard words split into the same units, so they match the lyrics unit by unit.
     private func japaneseAware(_ heard: [LyricListenMatcher.HeardWord]) -> [LyricListenMatcher.HeardWord] {
-        guard heard.contains(where: { Kana.containsJapanese($0.text) }) else { return heard }
-        return heard.flatMap { word -> [LyricListenMatcher.HeardWord] in
-            guard Kana.containsJapanese(word.text) else { return [word] }
-            return JapaneseLyrics.heardMorae(JapaneseText.tokens(word.text), time: word.time, duration: word.duration)
-        }
+        LyricRomanizer.units(heard, script: LyricScript.detect(heard.map(\.text)))
     }
 
     /// Picks the best timing source (listening, then the lyrics' own timing, then phrases), fits and saves.

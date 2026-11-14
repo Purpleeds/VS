@@ -17,7 +17,7 @@ struct GameScreen: View {
             GameView(song: song, backingURL: library.backingAudioURL(for: base),
                      videoURL: settings.settings.showVideo ? library.videoURL(for: base) : nil,
                      stems: library.stems(for: base),
-                     lyrics: JapaneseText.display(for: song, mode: settings.settings.japaneseLyrics), options: GameOptions(
+                     lyrics: LyricRomanizer.display(for: song, mode: settings.settings.romanizedLyrics), options: GameOptions(
                 difficulty: plan.difficulty,
                 octaveAgnostic: settings.settings.octaveAgnostic,
                 clickTrack: settings.settings.clickTrack,

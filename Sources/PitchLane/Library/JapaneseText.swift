@@ -59,25 +59,5 @@ enum JapaneseText {
     static func morae(_ line: String) -> [String] {
         JapaneseLyrics.morae(of: tokens(line))
     }
-
-    static func songHasJapanese(_ song: Song) -> Bool {
-        song.notes.contains { Kana.containsJapanese($0.lyric) }
-    }
-
-    /// What the lane shows for each note of `song`.
-    static func display(for song: Song, mode: JapaneseLyricsMode) -> LyricDisplay {
-        guard songHasJapanese(song), mode != .original else { return .plain(song) }
-        var romaji = song.notes.map(\.displayLyric)
-        for group in JapaneseRomanizer.lineGroups(for: song) {
-            let syllables = group.map { song.notes[$0].displayLyric }
-            let line = syllables.joined()
-            guard Kana.containsJapanese(line) else { continue }
-            let converted = JapaneseRomanizer.romanize(syllables: syllables, tokens: tokens(line))
-            for (index, noteIndex) in group.enumerated() where index < converted.count {
-                romaji[noteIndex] = converted[index].trimmingCharacters(in: .whitespaces)
-            }
-        }
-        return LyricDisplay(primary: romaji, secondary: mode == .both ? song.notes.map(\.displayLyric) : nil)
-    }
 }
 #endif

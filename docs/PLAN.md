@@ -349,3 +349,14 @@ fix a line, Save (lane updates); Listen Again in another language; Settings togg
   Twinkle, Little Star; Happy Birthday to You; Ode to Joy (Schiller's German words); Jingle Bells; Mary Had a Little
   Lamb; Row, Row, Row Your Boat; Are You Sleeping. Each is written once in `BuiltInSongs` and played slower (Easy) or
   faster with held-vowel slides (Hard). The three PitchLane originals stay.
+
+## 14. Split first, then listen and write notes from the voice (done)
+
+- Uploads: soundtrack → **separate voice and music** (`StemMaker`) → **notes from the voice only** (`VocalAnalysis`:
+  pitch frames outside sung phrases are dropped, so instruments never become notes) → save (video, backing, stems) →
+  **words from the voice**. Write Lyrics by Listening / Listen Again separate first when needed. Uploaded songs get
+  "Rewrite Notes from the Voice".
+- Recognition upgrade: Core `VocalPrep` (voice band 100 Hz–4.5 kHz, sung-phrase detection, per-phrase levelling,
+  silence between phrases) → iOS 26 long-form `SpeechTranscriber` (word times on the song's timeline; its language
+  model is installed by iOS) → fallback: the classic on-device recogniser phrase by phrase, stitched back by each
+  phrase's start time.

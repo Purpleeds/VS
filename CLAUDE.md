@@ -204,6 +204,12 @@ Runs on every push and PR:
   instead of listening again, replace it on Listen Again, and delete it when the backing audio changes.
 - Placement goes through `SongTranscript.lyricLines` + `LyricAligner` (word times), after `LyricRomanizer.units` for CJK.
 
+## Split, then listen (step 14)
+
+- Recognition and note writing for uploads always prefer the separated voice: `StemMaker` first, then `VocalAnalysis`
+  (notes gated by `VocalPrep.segments`) and `SongListener` (`VocalPrep.prepare` → `SpeechTranscriber`, falling back
+  to per-phrase `SFSpeechRecognizer`). Both stay on-device; only iOS's own speech model download touches the network.
+
 ## Menu look (step 11)
 
 - Menus use `GameUI.swift` (`GameBackdrop`, `ChunkyButtonStyle`, `GameTile`, `GradeBadge`, `NeonTitle`, `PlayerCard`).

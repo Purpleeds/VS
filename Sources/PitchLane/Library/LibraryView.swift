@@ -620,11 +620,19 @@ struct SongDetailSheet: View {
                 }
                 .buttonStyle(.bordered)
                 .controlSize(.small)
+                if song.source == .video {
+                    Button("Rewrite Notes from the Voice", systemImage: "music.mic") { library.rewriteNotesFromVoice(song) }
+                        .disabled(library.songJob != nil)
+                }
                 Button("Remove Separation", systemImage: "arrow.uturn.backward", role: .destructive) { confirmRemoveStems = true }
                     .disabled(library.songJob != nil)
             } else {
                 Button("Separate Voice and Music", systemImage: "slider.horizontal.2.square") { library.separateStems(for: song) }
                     .disabled(library.songJob != nil)
+                if song.source == .video {
+                    Button("Rewrite Notes from the Voice", systemImage: "music.mic") { library.rewriteNotesFromVoice(song) }
+                        .disabled(library.songJob != nil)
+                }
             }
         } header: {
             Text("Voice and music")

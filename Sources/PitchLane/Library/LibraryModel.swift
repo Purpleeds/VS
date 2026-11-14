@@ -242,24 +242,61 @@ final class LibraryModel: ObservableObject {
         }
     }
 
+    /// Upload → song: split the voice from the music, write notes from the voice only, save, then recognise the words
+    /// from the voice. Every step runs on the phone.
     private func transcribe(_ job: (url: URL, title: String)) async {
-        defer { try? FileManager.default.removeItem(at: job.url) }
+        var temporary: [URL] = [job.url]
+        defer { for url in temporary { try? FileManager.default.removeItem(at: url) } }
         let started = Date()
         let isVideo = VideoTools.isVideo(job.url)
-        AppLog.info("Transcribing \(isVideo ? "a video" : "an audio file") (\(job.url.pathExtension))", category: "library")
+        AppLog.info("Making a song from \(isVideo ? "a video" : "an audio file") (\(job.url.pathExtension))", category: "library")
+        func stage(_ name: String) {
+            transcription?.stage = name
+            transcription?.progress = 0
+        }
+        let report: @Sendable (Double) -> Void = { [weak self] fraction in
+            Task { @MainActor in self?.transcription?.progress = fraction }
+        }
         do {
-            let notes = try await VideoTools.transcribe(job.url) { [weak self] fraction in
-                Task { @MainActor in self?.transcription?.progress = fraction }
+            try FileManager.default.createDirectory(at: Self.importTempDirectory, withIntermediateDirectories: true)
+            // 1. The soundtrack (a video's audio, or the file itself).
+            var soundtrack = job.url
+            if isVideo {
+                stage("Reading the video's sound")
+                let audio = Self.importTempDirectory.appendingPathComponent("\(UUID().uuidString).m4a")
+                temporary.append(audio)
+                try await VideoTools.extractAudio(from: job.url, to: audio)
+                soundtrack = audio
             }
+            // 2. Split the voice from the music (stereo recordings).
+            stage("Separating the voice from the music")
+            let vocals = Self.importTempDirectory.appendingPathComponent("\(UUID().uuidString)-vocals.m4a")
+            let music = Self.importTempDirectory.appendingPathComponent("\(UUID().uuidString)-music.m4a")
+            temporary += [vocals, music]
+            var splitNote: String?
+            var split = false
+            do {
+                try await StemMaker.separate(soundtrack, vocalsOut: vocals, musicOut: music, progress: report)
+                split = true
+            } catch is CancellationError {
+                throw CancellationError()
+            } catch {
+                splitNote = "The voice couldn't be separated (\(error.localizedDescription)), so notes and words come from the whole recording."
+                AppLog.warning("Upload: separation failed: \(error.localizedDescription)", category: "library")
+            }
+            // 3. Notes from the singer's voice only.
+            stage("Writing notes from the singing")
+            let notes = try await VocalAnalysis.notes(from: split ? vocals : soundtrack, progress: report)
             try Task.checkCancellation()
             guard notes.count >= 3 else {
-                AppLog.warning("Transcription found \(notes.count) notes", category: "library")
+                AppLog.warning("Upload: only \(notes.count) notes found", category: "library")
                 show(Message(
                     title: "No singing found",
-                    text: "PitchLane couldn't hear a clear sung melody in \"\(job.title)\". Recordings of one voice (with little music behind it) work best."
+                    text: "PitchLane couldn't hear a clear sung melody in \"\(job.title)\". Recordings with one main singer work best."
                 ))
                 return
             }
+            // 4. Save: video, backing audio, and the separated voice and music.
             let song = Song(
                 id: UUID().uuidString,
                 title: SongLimits.clip(job.title),
@@ -269,39 +306,33 @@ final class LibraryModel: ObservableObject {
             )
             try store.save(song)
             var made = song
-            var backingProblem: String?
-            if isVideo {
-                made = try store.attachVideo(from: job.url, to: song)
-                backingProblem = await extractBacking(for: made)
-            } else {
-                made = try store.attachBackingAudio(from: job.url, to: song)
-            }
+            if isVideo { made = try store.attachVideo(from: job.url, to: made) }
+            made = try store.attachBackingAudio(from: soundtrack, to: made)
+            if split { made = try store.attachStems(vocals: vocals, music: music, to: made) }
             reload()
             let summary = made.summary
             AppLog.info(
-                "Made \"\(song.title)\" from \(isVideo ? "a video" : "audio"): \(notes.count) notes, \(summary.durationText), "
+                "Made \"\(song.title)\": \(notes.count) notes from the \(split ? "voice" : "whole mix"), \(summary.durationText), "
                     + "range \(summary.rangeText(accidentals: .sharps)), \(String(format: "%.1f", Date().timeIntervalSince(started))) s",
                 category: "library"
             )
-            var text = "\(notes.count) notes from the singing (\(summary.rangeText(accidentals: .sharps)))."
-                + (isVideo ? " The video plays behind the lane and its sound is the backing track." : " The file is the backing track.")
-            if let backingProblem { text += "\n\n" + backingProblem }
-            if autoLyrics, backingProblem == nil {
-                transcription?.stage = "Recognising the words"
-                transcription?.progress = 0
-                let words = await listenAndFit(songID: song.id, language: nil) { [weak self] fraction in
-                    Task { @MainActor in self?.transcription?.progress = fraction }
-                }
-                text += "\n\n" + words
+            var text = "\(notes.count) notes from the singer's voice (\(summary.rangeText(accidentals: .sharps)))."
+                + (isVideo ? " The video plays behind the lane." : "")
+                + (split ? " The voice and music are separated: use the Singer's voice slider to sing over the music yourself." : "")
+            if let splitNote { text += "\n\n" + splitNote }
+            // 5. Words, recognised from the voice.
+            if autoLyrics {
+                stage("Recognising the words")
+                text += "\n\n" + (await listenAndFit(songID: song.id, language: nil, progress: report))
             } else {
                 text += "\n\nAdd the words in the song's details: Write Lyrics by Listening, Find Lyrics Online, or type them."
             }
-            text += "\n\nEverything was worked out on this phone and is rough, especially with music behind the voice: check it in Practice, and use Listen Again or Edit Heard Words to fix mistakes."
+            text += "\n\nIf the words are in another language, pick it under Words by listening and tap Listen Again; fix single lines with Edit Heard Words."
             show(Message(title: "Made \"\(song.title)\"", text: text))
         } catch is CancellationError {
-            AppLog.info("Transcription cancelled", category: "library")
+            AppLog.info("Making a song was cancelled", category: "library")
         } catch {
-            AppLog.warning("Transcription failed: \(error.localizedDescription)", category: "library")
+            AppLog.warning("Making a song failed: \(error.localizedDescription)", category: "library")
             show(Message(title: "Couldn't make a song from \"\(job.title)\"", text: error.localizedDescription))
         }
     }
@@ -734,15 +765,72 @@ final class LibraryModel: ObservableObject {
     }
 
     /// Song sheet: "Write Lyrics by Listening" / "Listen Again".
+    /// Separates the voice first if the song isn't separated yet (recognition works much better on the voice
+    /// alone), then listens.
     func listenForWords(_ song: Song, language: String?) {
         guard songJobTask == nil else { return }
-        songJob = SongJob(songID: song.id, title: "Listening to the song for its words…", progress: 0)
+        let report: @Sendable (Double) -> Void = { [weak self] fraction in
+            Task { @MainActor in self?.songJob?.progress = fraction }
+        }
         songJobTask = Task { [weak self] in
-            let text = await self?.listenAndFit(songID: song.id, language: language) { [weak self] fraction in
-                Task { @MainActor in self?.songJob?.progress = fraction }
-            } ?? ""
+            var note = ""
+            if let self, self.stems(for: song) == nil, let backing = self.store.backingAudioURL(for: song) {
+                self.songJob = SongJob(songID: song.id, title: "Separating the voice from the music…", progress: 0)
+                if let problem = await self.makeStems(songID: song.id, backing: backing, progress: report) {
+                    note = " (" + problem + " Listened to the whole recording instead.)"
+                }
+            }
+            if Task.isCancelled {
+                self?.endSongJob()
+                return
+            }
+            self?.songJob = SongJob(songID: song.id, title: "Listening to the singer for the words…", progress: 0)
+            let text = await self?.listenAndFit(songID: song.id, language: language, progress: report) ?? ""
             self?.endSongJob()
-            self?.message = Message(title: "Words by listening", text: text + " Use Edit Heard Words to fix mistakes, or Listen Again.")
+            self?.message = Message(title: "Words by listening", text: text + note + " Use Edit Heard Words to fix mistakes, or Listen Again.")
+        }
+    }
+
+    /// Song sheet (uploaded songs): rewrite the notes from the singer's voice only, so the lane follows the vocal
+    /// melody and not the instruments; heard words go back on the new notes.
+    func rewriteNotesFromVoice(_ song: Song) {
+        guard songJobTask == nil, let backing = store.backingAudioURL(for: song) else { return }
+        let report: @Sendable (Double) -> Void = { [weak self] fraction in
+            Task { @MainActor in self?.songJob?.progress = fraction }
+        }
+        songJobTask = Task { [weak self] in
+            guard let self else { return }
+            defer { self.endSongJob() }
+            if self.stems(for: song) == nil {
+                self.songJob = SongJob(songID: song.id, title: "Separating the voice from the music…", progress: 0)
+                if let problem = await self.makeStems(songID: song.id, backing: backing, progress: report) {
+                    self.message = Message(title: "Couldn't separate the voice", text: problem)
+                    return
+                }
+            }
+            guard let vocals = self.stems(for: song)?.vocals else { return }
+            self.songJob = SongJob(songID: song.id, title: "Writing notes from the singer's voice…", progress: 0)
+            do {
+                let notes = try await VocalAnalysis.notes(from: vocals, progress: report)
+                guard notes.count >= 3, var current = self.imported.first(where: { $0.id == song.id }) else {
+                    self.message = Message(title: "No singing found", text: "The separated voice had no clear melody, so the notes were kept.")
+                    return
+                }
+                current.notes = notes
+                current.lineBreaks = MelodyTranscriber.lineBreaks(for: notes)
+                try self.store.save(current)
+                self.reload()
+                AppLog.info("Notes rewritten from the voice: \(notes.count)", category: "library")
+                var text = "\(notes.count) notes from the singer's voice."
+                if let transcript = self.transcripts[song.id] {
+                    text += " " + self.applyTranscript(transcript, to: song.id)
+                }
+                self.message = Message(title: "Notes rewritten", text: text)
+            } catch is CancellationError {
+                AppLog.info("Rewriting notes cancelled", category: "library")
+            } catch {
+                self.message = Message(title: "Couldn't rewrite the notes", text: error.localizedDescription)
+            }
         }
     }
 
@@ -793,6 +881,29 @@ final class LibraryModel: ObservableObject {
         songJobTask = Task { [weak self] in
             await self?.runSeparation(songID: song.id, backing: backing)
             self?.endSongJob()
+        }
+    }
+
+    /// Separates and attaches stems without a message; returns a problem to mention, or nil when it worked.
+    private func makeStems(songID: String, backing: URL, progress: @escaping @Sendable (Double) -> Void) async -> String? {
+        try? FileManager.default.createDirectory(at: Self.importTempDirectory, withIntermediateDirectories: true)
+        let vocals = Self.importTempDirectory.appendingPathComponent("\(UUID().uuidString)-vocals.m4a")
+        let music = Self.importTempDirectory.appendingPathComponent("\(UUID().uuidString)-music.m4a")
+        defer {
+            try? FileManager.default.removeItem(at: vocals)
+            try? FileManager.default.removeItem(at: music)
+        }
+        do {
+            try await StemMaker.separate(backing, vocalsOut: vocals, musicOut: music, progress: progress)
+            guard let latest = store.loadAll().songs.first(where: { $0.id == songID }) else { return "The song is gone." }
+            _ = try store.attachStems(vocals: vocals, music: music, to: latest)
+            reload()
+            return nil
+        } catch is CancellationError {
+            return "Separation was cancelled."
+        } catch {
+            AppLog.warning("Separation failed: \(error.localizedDescription)", category: "stems")
+            return error.localizedDescription
         }
     }
 

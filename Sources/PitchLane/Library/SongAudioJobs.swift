@@ -160,32 +160,118 @@ enum SongListener {
     }
 
     static let rate = 16_000.0
-    static let chunkSeconds = 30.0
 
+    /// Heard words with their song times. Steps:
+    /// 1. decode the (voice) track to 16 kHz mono;
+    /// 2. clean it up with Core `VocalPrep` (voice band, sung phrases levelled, silence between them);
+    /// 3. recognise it with the long-form on-device engine (`SpeechTranscriber`), which keeps the song's own timeline;
+    /// 4. if that isn't available or hears almost nothing, recognise each sung phrase on its own with the classic
+    ///    on-device recogniser and stitch the words back onto the timeline by phrase start.
     static func heardWords(
         in url: URL, locale: Locale = .current, hints: [String], progress: @escaping @Sendable (Double) -> Void
     ) async throws -> [LyricListenMatcher.HeardWord] {
         guard await VoiceSearch.authorization() == .authorized else { throw Failure.permission }
-        guard let recognizer = SFSpeechRecognizer(locale: locale) ?? SFSpeechRecognizer(locale: Locale(identifier: "en-US")),
-              recognizer.isAvailable, recognizer.supportsOnDeviceRecognition else { throw Failure.unavailable }
         let samples = try await decodeMono(url)
         guard !samples.isEmpty else { throw Failure.noAudio }
-        let chunk = Int(chunkSeconds * rate)
-        let pieces = max(1, (samples.count + chunk - 1) / chunk)
+        try Task.checkCancellation()
+        let prepared = VocalPrep.prepare(samples, sampleRate: rate)
+        let sung = prepared.segments.reduce(0) { $0 + $1.duration }
+        AppLog.info("Voice prepared: \(prepared.segments.count) sung phrases, \(Int(sung)) s of \(Int(Double(samples.count) / rate)) s", category: "lyrics")
+        guard !prepared.segments.isEmpty else { return [] }
+
         var words: [HeardWord] = []
-        var start = 0
-        var done = 0
-        while start < samples.count {
-            try Task.checkCancellation()
-            let end = min(samples.count, start + chunk)
-            let offset = Double(start) / rate
-            let heard = await recognize(Array(samples[start..<end]), recognizer: recognizer, hints: hints)
-            words += heard.map { HeardWord(text: $0.text, time: $0.time + offset, duration: $0.duration) }
-            done += 1
-            progress(Double(done) / Double(pieces))
-            start = end
+        do {
+            words = try await longForm(prepared.samples, locale: locale) { progress(0.6 * $0) }
+            AppLog.info("Long-form recogniser heard \(words.count) words", category: "lyrics")
+        } catch is CancellationError {
+            throw CancellationError()
+        } catch {
+            AppLog.info("Long-form recogniser unavailable (\(error.localizedDescription)); using phrase-by-phrase", category: "lyrics")
         }
-        return words
+        if words.count < 3 {
+            guard let recognizer = SFSpeechRecognizer(locale: locale), recognizer.isAvailable, recognizer.supportsOnDeviceRecognition else {
+                if words.isEmpty { throw Failure.unavailable }
+                return words
+            }
+            var stitched: [HeardWord] = []
+            for (index, segment) in prepared.segments.enumerated() {
+                try Task.checkCancellation()
+                let lo = max(0, Int(segment.start * rate)), hi = min(prepared.samples.count, Int(segment.end * rate))
+                guard hi > lo else { continue }
+                let heard = await recognize(Array(prepared.samples[lo..<hi]), recognizer: recognizer, hints: hints)
+                stitched += heard.map { HeardWord(text: $0.text, time: $0.time + segment.start, duration: $0.duration) }
+                progress(0.6 + 0.4 * Double(index + 1) / Double(prepared.segments.count))
+            }
+            AppLog.info("Phrase-by-phrase recogniser heard \(stitched.count) words", category: "lyrics")
+            if stitched.count > words.count { words = stitched }
+        }
+        progress(1)
+        return splitMultiWord(words).sorted { $0.time < $1.time }
+    }
+
+    /// iOS 26 long-form speech-to-text over the cleaned voice (written to a temporary file), with word times on the
+    /// song's own timeline. The language model is managed by iOS; audio stays on the phone.
+    private static func longForm(_ samples: [Float], locale: Locale, progress: @escaping @Sendable (Double) -> Void) async throws -> [HeardWord] {
+        guard let supported = await SpeechTranscriber.supportedLocale(equivalentTo: locale) else { throw Failure.unavailable }
+        let transcriber = SpeechTranscriber(locale: supported, transcriptionOptions: [], reportingOptions: [], attributeOptions: [.audioTimeRange])
+        if let request = try await AssetInventory.assetInstallationRequest(supporting: [transcriber]) {
+            try await request.downloadAndInstall()
+        }
+        let file = FileManager.default.temporaryDirectory.appendingPathComponent("pitchlane-voice-\(UUID().uuidString).caf")
+        defer { try? FileManager.default.removeItem(at: file) }
+        try writeMono(samples, to: file)
+        let duration = max(1, Double(samples.count) / rate)
+        let analyzer = SpeechAnalyzer(modules: [transcriber])
+        let collector = Task { () -> [HeardWord] in
+            var words: [HeardWord] = []
+            for try await result in transcriber.results {
+                for run in result.text.runs {
+                    guard let range = run.audioTimeRange else { continue }
+                    let text = String(result.text[run.range].characters).trimmingCharacters(in: .whitespacesAndNewlines)
+                    guard !text.isEmpty else { continue }
+                    let start = range.start.seconds, length = range.duration.seconds
+                    guard start.isFinite, length.isFinite else { continue }
+                    words.append(HeardWord(text: text, time: start, duration: max(0.05, length)))
+                    progress(min(1, (start + length) / duration))
+                }
+            }
+            return words
+        }
+        let audioFile = try AVAudioFile(forReading: file)
+        if let last = try await analyzer.analyzeSequence(from: audioFile) {
+            try await analyzer.finalizeAndFinish(through: last)
+        } else {
+            await analyzer.cancelAndFinishNow()
+        }
+        return try await collector.value
+    }
+
+    /// A recognised run with several words ("happy birthday") becomes one timed word each, sharing its time.
+    private static func splitMultiWord(_ words: [HeardWord]) -> [HeardWord] {
+        words.flatMap { word -> [HeardWord] in
+            let parts = word.text.split(whereSeparator: \.isWhitespace).map(String.init)
+            guard parts.count > 1 else { return [word] }
+            let step = word.duration / Double(parts.count)
+            return parts.enumerated().map { HeardWord(text: $1, time: word.time + Double($0) * step, duration: step) }
+        }
+    }
+
+    private static func writeMono(_ samples: [Float], to url: URL) throws {
+        guard let format = AVAudioFormat(commonFormat: .pcmFormatFloat32, sampleRate: rate, channels: 1, interleaved: false) else {
+            throw Failure.noAudio
+        }
+        let file = try AVAudioFile(forWriting: url, settings: format.settings, commonFormat: .pcmFormatFloat32, interleaved: false)
+        var index = 0
+        let piece = Int(rate) * 4
+        while index < samples.count {
+            let n = min(piece, samples.count - index)
+            guard let buffer = AVAudioPCMBuffer(pcmFormat: format, frameCapacity: AVAudioFrameCount(n)),
+                  let channel = buffer.floatChannelData?[0] else { throw Failure.noAudio }
+            buffer.frameLength = AVAudioFrameCount(n)
+            samples.withUnsafeBufferPointer { channel.update(from: $0.baseAddress! + index, count: n) }
+            try file.write(from: buffer)
+            index += n
+        }
     }
 
     private static func recognize(_ samples: [Float], recognizer: SFSpeechRecognizer, hints: [String]) async -> [HeardWord] {
@@ -227,7 +313,7 @@ enum SongListener {
     }
 
     /// The whole file as mono floats at 16 kHz (about 4 MB per minute).
-    private static func decodeMono(_ url: URL) async throws -> [Float] {
+    static func decodeMono(_ url: URL) async throws -> [Float] {
         let asset = AVURLAsset(url: url)
         guard let track = try await asset.loadTracks(withMediaType: .audio).first else { throw Failure.noAudio }
         return try readMono(asset: asset, track: track)
@@ -265,4 +351,29 @@ enum SongListener {
 }
 
 typealias HeardWord = LyricListenMatcher.HeardWord
+/// Notes written from the singer's voice only: pitch frames outside sung phrases (instrument leakage, breaths,
+/// silence) are dropped, so the lane holds the vocal melody, not the backing.
+enum VocalAnalysis {
+    static func notes(from url: URL, progress: @escaping @Sendable (Double) -> Void) async throws -> [SongNote] {
+        let rate = SongListener.rate
+        let samples = try await SongListener.decodeMono(url)
+        try Task.checkCancellation()
+        let segments = VocalPrep.segments(VocalPrep.voiceBand(samples, sampleRate: rate), sampleRate: rate)
+        let pipeline = PitchPipeline(inputSampleRate: rate)
+        var transcriber = MelodyTranscriber()
+        let piece = Int(rate)
+        var index = 0
+        while index < samples.count {
+            try Task.checkCancellation()
+            let end = min(samples.count, index + piece)
+            for frame in pipeline.process(Array(samples[index..<end])) {
+                transcriber.add(time: frame.time, midi: VocalPrep.contains(segments, frame.time) ? frame.midi : nil)
+            }
+            index = end
+            if index % (piece * 5) == 0 { progress(Double(index) / Double(samples.count)) }
+        }
+        progress(1)
+        return transcriber.finish()
+    }
+}
 #endif

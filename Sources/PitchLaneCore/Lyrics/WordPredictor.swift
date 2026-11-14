@@ -48,6 +48,11 @@ public enum WordPredictor {
         public var words: [HeardWord]
         /// Heard words replaced (a run-together pair counts as two).
         public var changed: Int
+
+        public init(words: [HeardWord], changed: Int) {
+            self.words = words
+            self.changed = changed
+        }
     }
 
     /// Heard words longer than this are taken as they are (bounds the work on very long recordings).
@@ -418,7 +423,10 @@ public enum WordPredictor {
                     }
                 }
             }
-            return Array(found.values.sorted { $0.score > $1.score }.prefix(10))
+            // The ten best, always keeping the heard word itself (so the heard reading stays in the running).
+            var best = Array(found.values.sorted { $0.score > $1.score }.prefix(10))
+            if let heard = found.values.first(where: \.isHeard), !best.contains(where: \.isHeard) { best.append(heard) }
+            return best
         }
 
         /// log-likelihood that `key` was heard as `slot` (rough): by sound key when both are English, else by how

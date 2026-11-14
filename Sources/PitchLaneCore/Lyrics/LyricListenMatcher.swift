@@ -29,12 +29,13 @@ public enum LyricListenMatcher {
         public static let maxAlternatives = 6
 
         /// Non-empty, different from the word itself, unique, at most `maxAlternatives`; nil when none are left.
+        /// Compared word by word, so "good night" is a real alternative to "goodnight".
         static func cleanAlternatives(_ alternatives: [String]?, besides text: String) -> [String]? {
             guard let alternatives else { return nil }
-            var seen: Set<String> = [LyricListenMatcher.key(text)]
+            var seen: Set<String> = [WordModel.phraseKey(text)]
             let kept = alternatives
                 .map { $0.trimmingCharacters(in: .whitespacesAndNewlines) }
-                .filter { !$0.isEmpty && $0.count <= 60 && seen.insert(LyricListenMatcher.key($0)).inserted }
+                .filter { !$0.isEmpty && $0.count <= 60 && !WordModel.phraseKey($0).isEmpty && seen.insert(WordModel.phraseKey($0)).inserted }
             return kept.isEmpty ? nil : Array(kept.prefix(maxAlternatives))
         }
     }

@@ -95,10 +95,16 @@ final class GuidedSeparatorTests: XCTestCase {
 
     func testTheGuideFindsTheSingerAndTheirPitch() {
         let guideRate = 16_000.0
-        let voice: [Float] = (0..<Int(3.5 * guideRate)).map { i in
+        var voice = [Float](repeating: 0, count: Int(3.5 * guideRate))
+        for i in Int(guideRate)..<Int(2.5 * guideRate) {
             let t = Double(i) / guideRate
-            guard t >= 1, t < 2.5 else { return 0 }
-            return Float((1...6).reduce(0.0) { $0 + 0.3 / Double($1) * sin(2 * Double.pi * 220 * Double($1) * t) })
+            var value = 0.0
+            for h in 1...6 {
+                let harmonic = Double(h)
+                let phase: Double = 2 * Double.pi * 220 * harmonic * t
+                value += 0.3 / harmonic * sin(phase)
+            }
+            voice[i] = Float(value)
         }
         let guide = VocalGuide.analyze(voice, sampleRate: guideRate)
         XCTAssertEqual(guide.singing.count, 1)

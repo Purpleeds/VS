@@ -411,3 +411,16 @@ fix a line, Save (lane updates); Listen Again in another language; Settings togg
   (Core `LibrarySort`, `AppSettings.librarySort`).
 - **Song of the day** (Core `DailySong`): one built-in a day (steps 7 through the list, so never twice running), a
   Home card to play it, +50 XP for the first finish each day (`PlayerProgress`).
+
+## 19. Game screen look (done)
+
+- Lane: stage background with two slow glows (still with Reduce Motion), piano-roll rows (black-key semitones
+  darker), a semitone ruler on the playhead, shaded notes with a dark outline (golden ones glint), the past dimmed
+  behind the playhead and new notes fading in on the right, a "sing here" marker at the next note's pitch, shadowed
+  rating pop-ups, and a song progress bar along the top.
+- **Karaoke strip** under the lane (Core `KaraokeLines`): the line being sung, each word lighting up as it is sung
+  with a gold wipe through the current one, and the next line (or the original script) underneath. Words are no
+  longer drawn on the notes.
+- Title card (song, artist, difficulty) during the start countdown; the countdown has a draining ring.
+- HUD: glass score card with the grade so far and a glowing energy bar; the combo pill glows with the multiplier;
+  glass pause button.

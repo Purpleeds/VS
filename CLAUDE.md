@@ -110,6 +110,9 @@ Runs on every push and PR:
   only when a note ends. Game fps goes to the debug overlay via `AudioDiagnostics.setGameFrameStats`.
 - Canvas closures that touch main-actor state wrap their body in `MainActor.assumeIsolated`.
 - Personal bests: `Application Support/PitchLane/personal-bests.json` (`ScoreStore`).
+- Step 19: game-screen lyrics live in the karaoke strip under the lane (Core `KaraokeLines`, precomputed in
+  `GameSession.karaoke`), not on the notes. Moving decoration in `LaneRenderer` (stage glow drift, pulses, glints)
+  stops under Reduce Motion (`reduceMotion` parameter).
 
 ## Playback and latency (step 4)
 

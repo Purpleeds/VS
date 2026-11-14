@@ -18,6 +18,7 @@ struct GameView: View {
     @EnvironmentObject private var scores: ScoreStore
     @Environment(\.dismiss) private var dismiss
     @Environment(\.scenePhase) private var scenePhase
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
     @State private var started = false
     @State private var showRouteWarning = true
 
@@ -164,7 +165,8 @@ struct GameView: View {
                         host: host,
                         accidentals: settings.settings.accidentals,
                         showNoteNames: options.showNoteNames,
-                        videoBehind: videoURL != nil
+                        videoBehind: videoURL != nil,
+                        reduceMotion: reduceMotion
                     )
                 }
             }
@@ -183,23 +185,39 @@ struct GameHUD: View {
     var body: some View {
         VStack {
             HStack(alignment: .top) {
-                VStack(alignment: .leading, spacing: 2) {
-                    Text("\(session.score)")
-                        .accessibilityLabel("Score \(session.score)")
-                        .font(.system(size: 30, weight: .heavy, design: .rounded))
-                        .monospacedDigit()
-                        .foregroundStyle(Theme.textPrimary)
-                        .contentTransition(.numericText())
-                        .animation(.snappy, value: session.score)
-                    Text(String(format: "%.0f%%", session.accuracy * 100))
-                        .font(.caption.monospacedDigit())
+                VStack(alignment: .leading, spacing: 3) {
+                    HStack(alignment: .center, spacing: 8) {
+                        Text("\(session.score)")
+                            .accessibilityLabel("Score \(session.score)")
+                            .font(.system(size: 28, weight: .heavy, design: .rounded))
+                            .monospacedDigit()
+                            .foregroundStyle(Theme.textPrimary)
+                            .shadow(color: Theme.accent.opacity(0.45), radius: 6)
+                            .contentTransition(.numericText())
+                            .animation(.snappy, value: session.score)
+                        if !session.results.isEmpty {
+                            GradeBadge(grade: Grade(accuracy: session.accuracy), size: 24)
+                                .accessibilityLabel("Grade so far \(Grade(accuracy: session.accuracy).rawValue)")
+                        }
+                    }
+                    Text(String(format: "%.0f%% accuracy", session.accuracy * 100))
+                        .font(.caption2.weight(.semibold).monospacedDigit())
                         .foregroundStyle(Theme.textSecondary)
                     if session.showsHealth {
-                        EnergyBar(value: session.health)
-                            .frame(width: 96, height: 6)
-                            .padding(.top, 2)
+                        HStack(spacing: 5) {
+                            Image(systemName: "bolt.fill")
+                                .font(.system(size: 9, weight: .black))
+                                .foregroundStyle(session.health > 0.25 ? Theme.gold : Theme.bad)
+                            EnergyBar(value: session.health)
+                                .frame(width: 104, height: 7)
+                        }
+                        .padding(.top, 1)
                     }
                 }
+                .padding(.horizontal, 12)
+                .padding(.vertical, 8)
+                .background(.ultraThinMaterial.opacity(0.85), in: RoundedRectangle(cornerRadius: 16, style: .continuous))
+                .overlay(RoundedRectangle(cornerRadius: 16, style: .continuous).strokeBorder(.white.opacity(0.08), lineWidth: 1))
                 Spacer()
                 VStack(spacing: 2) {
                     Text(session.song.title)
@@ -239,9 +257,11 @@ struct GameHUD: View {
                                     .transition(.scale(scale: 1.8).combined(with: .opacity))
                             }
                         }
-                        .padding(.horizontal, 10)
-                        .padding(.vertical, 4)
+                        .padding(.horizontal, 12)
+                        .padding(.vertical, 5)
                         .background(.ultraThinMaterial, in: Capsule())
+                        .overlay(Capsule().strokeBorder(Theme.gold.opacity(session.multiplier > 1 ? 0.7 : 0.12), lineWidth: 1.5))
+                        .shadow(color: Theme.gold.opacity(session.multiplier > 1 ? 0.45 : 0), radius: 10)
                         .animation(.spring(response: 0.35, dampingFraction: 0.5), value: session.multiplier)
                         .transition(.scale.combined(with: .opacity))
                         .accessibilityElement(children: .combine)
@@ -253,12 +273,13 @@ struct GameHUD: View {
                         .font(.title3.weight(.bold))
                         .foregroundStyle(Theme.textPrimary)
                         .frame(width: 44, height: 44)
-                        .background(Theme.surface.opacity(0.8), in: Circle())
+                        .background(.ultraThinMaterial, in: Circle())
+                        .overlay(Circle().strokeBorder(.white.opacity(0.1), lineWidth: 1))
                 }
                 .accessibilityLabel("Pause")
             }
             .padding(.horizontal, 16)
-            .padding(.top, 6)
+            .padding(.top, 8)
             Spacer()
         }
     }
@@ -278,11 +299,13 @@ struct EnergyBar: View {
 
     var body: some View {
         GeometryReader { geo in
+            let color = value > 0.5 ? Theme.good : (value > 0.25 ? Theme.warn : Theme.bad)
             ZStack(alignment: .leading) {
                 Capsule().fill(Theme.surface)
                 Capsule()
-                    .fill(value > 0.5 ? Theme.good : (value > 0.25 ? Theme.warn : Theme.bad))
+                    .fill(LinearGradient(colors: [color.mix(with: .white, by: 0.35), color], startPoint: .top, endPoint: .bottom))
                     .frame(width: geo.size.width * CGFloat(max(0, min(1, value))))
+                    .shadow(color: color.opacity(0.6), radius: 4)
                     .animation(.easeOut(duration: 0.2), value: value)
             }
         }

@@ -119,13 +119,20 @@ final class GameSession: ObservableObject {
 
     /// Text drawn on each note (romaji for Japanese songs), precomputed once.
     let lyrics: LyricDisplay
+    /// Lyric lines for the karaoke strip under the lane (Core `KaraokeLines`), precomputed once.
+    let karaoke: [KaraokeLine]
+    /// End of the last note (song progress bar).
+    let songEnd: Double
 
     init(song: Song, options: GameOptions, lyrics: LyricDisplay? = nil) {
         let viewport = LaneViewport(song: song)
         self.song = song
         self.options = options
         let display = lyrics ?? .plain(song)
-        self.lyrics = display.primary.count == song.notes.count ? display : .plain(song)
+        let shown = display.primary.count == song.notes.count ? display : .plain(song)
+        self.lyrics = shown
+        karaoke = KaraokeLines.build(song: song, display: shown.primary)
+        songEnd = song.notes.map(\.end).max() ?? 0
         self.viewport = viewport
         noteIndex = NoteIndex(song: song)
         let scoring = Self.scoringSong(for: song, practice: options.practice)

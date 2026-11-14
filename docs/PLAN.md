@@ -308,3 +308,21 @@ listening off (spread over phrases); a mono song shows the mono message.
 Import a Japanese UltraStar or MIDI file (Shift-JIS too): lyrics in romaji on the lane, particles as wa/e/o; switch to
 Romaji + Japanese and Japanese; a kanji line (readings); a song made from a video + Japanese lyrics from Find Lyrics
 Online, with listening on; search "sakura" for a さくら title.
+
+## 11. Korean + Chinese lyrics, game-style menus (done)
+
+- **Korean:** Core `Hangul` (Revised Romanization from the syllable blocks, with liaison, nasalization and ㄹ rules
+  across notes). **Chinese:** pinyin with tone marks from the system tokenizer (word-level, so polyphones usually read
+  right), falling back to the system Han → Latin transform; Core `ChineseRomanizer` puts one reading on each character.
+  `LyricScript` (Core) detects Japanese / Korean / Chinese per song; the display setting is now "Japanese, Korean &
+  Chinese lyrics" (`AppSettings.romanizedLyrics`, stored under the old key). Lyrics are fitted one syllable/character
+  per note; listening uses the ko-KR / zh-CN on-device recognisers. Romanized titles are searchable.
+- **Game-style menus** (no emoji, SF Symbols only): `GameBackdrop` (gradient, slow colour blooms, drifting music
+  symbols; still with Reduce Motion), `ChunkyButtonStyle` (glossy button on a darker edge that presses down),
+  `GameTile`, `GradeBadge`, `NeonTitle`, `PlayerCard` (level ring, XP, day streak, best grade from Core
+  `PlayerProgress`). Home: title, player card, big PLAY, tiles; best-grade badges on Library rows; chunky
+  Sing / Resume / Again / Done buttons.
+
+### Phone checklist
+A Korean song (romanization, e.g. 사랑해 sa-rang-hae), a Chinese song (pinyin with tones); Romanized + original;
+home screen look and Reduce Motion; level/streak after a run; grade badges in the Library.

@@ -151,7 +151,7 @@ struct StatsView: View {
             }
         }
         .scrollContentBackground(.hidden)
-        .background(Theme.background.ignoresSafeArea())
+        .background(GameBackdrop(intensity: 0.5))
         .navigationTitle("Stats")
         .navigationBarTitleDisplayMode(.inline)
     }
@@ -197,7 +197,7 @@ struct SongStatsView: View {
             }
         }
         .scrollContentBackground(.hidden)
-        .background(Theme.background.ignoresSafeArea())
+        .background(GameBackdrop(intensity: 0.5))
         .navigationTitle(records.first?.songTitle ?? "Song")
         .navigationBarTitleDisplayMode(.inline)
     }

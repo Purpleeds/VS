@@ -34,39 +34,50 @@ enum Route: Hashable {
 struct HomeView: View {
     @State private var path: [Route] = []
     @EnvironmentObject private var audio: AudioInput
+    @EnvironmentObject private var scores: ScoreStore
+    @State private var pulse = false
+
+    private let columns = [GridItem(.flexible(), spacing: 14), GridItem(.flexible(), spacing: 14)]
 
     var body: some View {
         NavigationStack(path: $path) {
             ZStack {
-                Theme.background.ignoresSafeArea()
+                GameBackdrop()
                 ScrollView {
-                    VStack(spacing: 28) {
-                        VStack(spacing: 6) {
-                            Image(systemName: "waveform")
-                                .font(.system(size: 34, weight: .semibold))
-                                .foregroundStyle(Theme.accent)
-                            Text("PitchLane")
-                                .font(.system(size: 40, weight: .heavy, design: .rounded))
-                                .foregroundStyle(Theme.textPrimary)
-                            Text("Sing the line.")
-                                .font(.subheadline)
-                                .foregroundStyle(Theme.textSecondary)
+                    VStack(spacing: 22) {
+                        header
+                        PlayerCard(progress: PlayerProgress(history: scores.history))
+                        NavigationLink(value: Route.play) {
+                            HStack(spacing: 12) {
+                                Image(systemName: "play.fill")
+                                    .font(.system(size: 22, weight: .black))
+                                Text("PLAY")
+                                    .tracking(3)
+                            }
+                        }
+                        .buttonStyle(ChunkyButtonStyle(color: Theme.accent, height: 66))
+                        .accessibilityLabel("Play")
+                        LazyVGrid(columns: columns, spacing: 14) {
+                            tile("Library", "Your songs and imports", "books.vertical.fill", Theme.violet, .library)
+                            tile("Tuner", "See the note you sing", "tuningfork", Theme.accent, .tuner)
+                            tile("Practice", "Range test and hold drill", "target", Theme.accentSecondary, .practice)
+                            tile("Stats", "Scores and progress", "chart.line.uptrend.xyaxis", Theme.gold, .stats)
                         }
                         RangeCard { path.append(.rangeTest) }
-                            .frame(maxWidth: 360)
-                        VStack(spacing: 12) {
-                            menuButton("Play", symbol: "play.fill", route: .play, prominent: true)
-                            menuButton("Library", symbol: "books.vertical", route: .library)
-                            menuButton("Tuner", symbol: "tuningfork", route: .tuner)
-                            menuButton("Practice", symbol: "figure.mind.and.body", route: .practice)
-                            menuButton("Stats", symbol: "chart.line.uptrend.xyaxis", route: .stats)
-                            menuButton("Settings", symbol: "gearshape", route: .settings)
+                        NavigationLink(value: Route.settings) {
+                            Label("Settings", systemImage: "gearshape.fill")
+                                .font(.system(.subheadline, design: .rounded).weight(.bold))
+                                .foregroundStyle(Theme.textSecondary)
+                                .padding(.vertical, 10)
+                                .padding(.horizontal, 18)
+                                .background(.ultraThinMaterial, in: Capsule())
                         }
-                        .frame(maxWidth: 360)
+                        .buttonStyle(PressableStyle())
                     }
+                    .frame(maxWidth: 440)
                     .frame(maxWidth: .infinity)
-                    .padding(.horizontal, 24)
-                    .padding(.vertical, 24)
+                    .padding(.horizontal, 20)
+                    .padding(.vertical, 20)
                 }
                 .scrollBounceBehavior(.basedOnSize)
             }
@@ -102,26 +113,37 @@ struct HomeView: View {
         }
     }
 
+    private var header: some View {
+        VStack(spacing: 4) {
+            Image(systemName: "waveform")
+                .font(.system(size: 34, weight: .heavy))
+                .foregroundStyle(Theme.titleGradient)
+                .symbolEffect(.variableColor.iterative.reversing, options: .repeating, isActive: pulse)
+                .shadow(color: Theme.accent.opacity(0.6), radius: 10)
+            NeonTitle(text: "PitchLane")
+            Text("SING THE LINE")
+                .font(.system(.caption, design: .rounded).weight(.heavy))
+                .tracking(4)
+                .foregroundStyle(Theme.textSecondary)
+        }
+        .padding(.top, 8)
+        .onAppear { pulse = true }
+        .accessibilityElement(children: .combine)
+        .accessibilityLabel("PitchLane")
+    }
+
+    private func tile(_ title: String, _ detail: String, _ symbol: String, _ color: Color, _ route: Route) -> some View {
+        NavigationLink(value: route) {
+            GameTile(title: title, detail: detail, symbol: symbol, color: color)
+        }
+        .buttonStyle(PressableStyle())
+    }
+
     /// Starts a game once the song sheet has finished dismissing.
     private func play(_ song: Song, _ plan: GamePlan) {
         Task { @MainActor in
             try? await Task.sleep(for: .milliseconds(350))
             path.append(.game(GameRoute(songID: song.id, plan: plan)))
-        }
-    }
-
-    private func menuButton(_ title: String, symbol: String, route: Route, prominent: Bool = false) -> some View {
-        NavigationLink(value: route) {
-            HStack(spacing: 10) {
-                Image(systemName: symbol)
-                Text(title).font(.headline)
-            }
-            .frame(maxWidth: .infinity, minHeight: 50)
-            .foregroundStyle(prominent ? Theme.background : Theme.textPrimary)
-            .background(
-                prominent ? Theme.accent : Theme.surface,
-                in: RoundedRectangle(cornerRadius: 14, style: .continuous)
-            )
         }
     }
 }

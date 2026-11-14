@@ -338,9 +338,9 @@ struct PauseMenu: View {
                         .font(.largeTitle.weight(.heavy))
                         .foregroundStyle(Theme.textPrimary)
                     Button(action: onResume) {
-                        Label("Resume", systemImage: "play.fill").frame(minWidth: 190)
+                        Label("RESUME", systemImage: "play.fill").frame(minWidth: 190)
                     }
-                    .buttonStyle(.borderedProminent)
+                    .buttonStyle(ChunkyButtonStyle(color: Theme.accent, height: 50))
                     .disabled(!audioReady)
                     if !audioReady {
                         Text("Waiting for audio…")
@@ -525,13 +525,14 @@ struct ResultsView: View {
                 Spacer(minLength: 0)
                 HStack {
                     Button(action: onAgain) {
-                        Label("Sing again", systemImage: "arrow.counterclockwise")
+                        Label("AGAIN", systemImage: "arrow.counterclockwise")
                     }
-                    .buttonStyle(.borderedProminent)
-                    Button("Done", action: onDone)
-                        .buttonStyle(.bordered)
+                    .buttonStyle(ChunkyButtonStyle(color: Theme.accent, height: 50))
+                    Button(action: onDone) {
+                        Text("DONE")
+                    }
+                    .buttonStyle(ChunkyButtonStyle(color: Theme.surfaceHighlight, textColor: Theme.textPrimary, height: 50))
                 }
-                .controlSize(.large)
             }
             .frame(maxWidth: .infinity, alignment: .leading)
             }

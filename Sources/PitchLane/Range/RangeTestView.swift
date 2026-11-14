@@ -244,8 +244,10 @@ struct RangeCard: View {
                     .foregroundStyle(Theme.accent)
             }
             .padding(14)
-            .background(Theme.surface, in: RoundedRectangle(cornerRadius: 14, style: .continuous))
+            .background(.ultraThinMaterial.opacity(0.85), in: RoundedRectangle(cornerRadius: 18, style: .continuous))
+            .overlay(RoundedRectangle(cornerRadius: 18, style: .continuous).strokeBorder(Theme.accent.opacity(0.35), lineWidth: 1))
         }
+        .buttonStyle(PressableStyle())
         .accessibilityLabel(settings.settings.vocalRange.map { "Your range \($0.text(accidentals: accidentals)). Retest." } ?? "Find your vocal range")
     }
 }

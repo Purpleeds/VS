@@ -32,7 +32,7 @@ struct PracticeHubView: View {
             }
         }
         .scrollContentBackground(.hidden)
-        .background(Theme.background.ignoresSafeArea())
+        .background(GameBackdrop(intensity: 0.5))
         .navigationTitle("Practice")
         .navigationBarTitleDisplayMode(.inline)
     }

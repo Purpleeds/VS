@@ -56,7 +56,7 @@ struct LibraryView: View {
             }
         }
         .scrollContentBackground(.hidden)
-        .background(Theme.background.ignoresSafeArea())
+        .background(GameBackdrop(intensity: 0.6))
         .navigationTitle(title)
         .navigationBarTitleDisplayMode(.inline)
         .searchable(text: $query, prompt: "Search songs")
@@ -139,6 +139,13 @@ struct LibraryView: View {
         }
     }
 
+    /// Best grade over every difficulty of these song ids.
+    private func bestGrade(_ ids: [String]) -> Grade? {
+        let order: [Grade] = [.s, .a, .b, .c, .d, .f]
+        let grades = ids.flatMap { id in Difficulty.allCases.compactMap { scores.best(songID: id, difficulty: $0)?.grade } }
+        return grades.min { (order.firstIndex(of: $0) ?? 9) < (order.firstIndex(of: $1) ?? 9) }
+    }
+
     private var voiceCandidates: [VoiceQuery.Candidate] {
         BuiltInKind.allCases.map { VoiceQuery.Candidate(id: "builtin:\($0.rawValue)", title: $0.title) }
             + library.imported.map { song in
@@ -193,7 +200,8 @@ struct LibraryView: View {
                         subtitle: [song.artist, song.sourceName].filter { !$0.isEmpty }.joined(separator: " · "),
                         summary: song.summary,
                         accidentals: settings.settings.accidentals,
-                        badge: song.videoFile != nil ? "film" : (song.backingAudioFile == nil ? nil : "music.note")
+                        badge: song.videoFile != nil ? "film" : (song.backingAudioFile == nil ? nil : "music.note"),
+                        grade: bestGrade([song.id])
                     )
                 }
             }
@@ -220,7 +228,8 @@ struct LibraryView: View {
                             subtitle: kind.subtitle + " · Easy / Normal / Hard",
                             summary: BuiltInSongs.song(kind, .normal).summary,
                             accidentals: settings.settings.accidentals,
-                            badge: nil
+                            badge: nil,
+                            grade: bestGrade(Difficulty.allCases.map { BuiltInSongs.song(kind, $0).id })
                         )
                     }
                 }
@@ -235,13 +244,23 @@ struct SongRow: View {
     let summary: SongSummary
     let accidentals: Accidentals
     let badge: String?
+    var grade: Grade?
 
     var body: some View {
         HStack(spacing: 12) {
+            if let grade {
+                GradeBadge(grade: grade, size: 32)
+            } else {
+                RoundedRectangle(cornerRadius: 9, style: .continuous)
+                    .strokeBorder(Theme.surfaceHighlight, style: StrokeStyle(lineWidth: 1.5, dash: [4, 3]))
+                    .frame(width: 32, height: 32)
+                    .overlay(Image(systemName: "music.note").font(.caption.weight(.bold)).foregroundStyle(Theme.textSecondary))
+                    .accessibilityHidden(true)
+            }
             VStack(alignment: .leading, spacing: 3) {
                 HStack(spacing: 6) {
                     Text(title)
-                        .font(.headline)
+                        .font(.system(.headline, design: .rounded).weight(.bold))
                         .foregroundStyle(Theme.textPrimary)
                     if let badge {
                         Image(systemName: badge)
@@ -432,12 +451,12 @@ struct SongDetailSheet: View {
                         settings.settings.lastDifficulty = difficulty
                         onPlay(song, GamePlan(difficulty: difficulty, transpose: shift, practice: practice))
                     } label: {
-                        Label("\(practice.isPractice ? "Practice" : "Sing") \(difficulty.displayName)", systemImage: "play.fill")
-                            .font(.headline)
-                            .frame(maxWidth: .infinity)
+                        Label("\(practice.isPractice ? "Practice" : "Sing") \(difficulty.displayName)".uppercased(), systemImage: "play.fill")
+                            .tracking(1.5)
                     }
-                    .buttonStyle(.borderedProminent)
+                    .buttonStyle(ChunkyButtonStyle(color: practice.isPractice ? Theme.gold : Theme.accent))
                     .listRowBackground(Color.clear)
+                    .listRowInsets(EdgeInsets(top: 6, leading: 0, bottom: 6, trailing: 0))
                 }
             }
             if song.source != .builtIn {

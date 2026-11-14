@@ -96,8 +96,9 @@ final class ShiftJISTests: XCTestCase {
     }
 
     func testJapaneseLyricsSettingDefaultsToRomaji() throws {
-        XCTAssertEqual(try JSONDecoder().decode(AppSettings.self, from: Data("{}".utf8)).japaneseLyrics, .romaji)
-        XCTAssertEqual(try JSONDecoder().decode(AppSettings.self, from: Data(#"{"japaneseLyrics":"both"}"#.utf8)).japaneseLyrics, .both)
-        XCTAssertEqual(try JSONDecoder().decode(AppSettings.self, from: Data(#"{"japaneseLyrics":"klingon"}"#.utf8)).japaneseLyrics, .romaji)
+        XCTAssertEqual(try JSONDecoder().decode(AppSettings.self, from: Data("{}".utf8)).romanizedLyrics, .romanized)
+        XCTAssertEqual(try JSONDecoder().decode(AppSettings.self, from: Data(#"{"japaneseLyrics":"both"}"#.utf8)).romanizedLyrics, .both)
+        XCTAssertEqual(try JSONDecoder().decode(AppSettings.self, from: Data(#"{"japaneseLyrics":"romaji"}"#.utf8)).romanizedLyrics, .romanized)
+        XCTAssertEqual(try JSONDecoder().decode(AppSettings.self, from: Data(#"{"japaneseLyrics":"klingon"}"#.utf8)).romanizedLyrics, .romanized)
     }
 }

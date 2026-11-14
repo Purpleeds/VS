@@ -154,8 +154,9 @@ public enum LyricAligner {
         let current = note.lyric.trimmingCharacters(in: .whitespaces)
         if current.isEmpty {
             note.lyric = clean + " "
-        } else if Kana.containsJapanese(clean), let last = current.unicodeScalars.last, Kana.isKana(last) || Kana.isKanji(last) {
-            // Japanese morae on one note join without spaces (こ + こ → ここ).
+        } else if clean.unicodeScalars.contains(where: LyricScript.isSyllabic), let last = current.unicodeScalars.last,
+                  LyricScript.isSyllabic(last) {
+            // Japanese morae, Chinese characters and Hangul syllables on one note join without spaces (こ + こ → ここ).
             note.lyric = current + clean + " "
         } else {
             note.lyric = current + " " + clean + " "

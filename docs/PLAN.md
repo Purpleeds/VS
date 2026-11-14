@@ -289,3 +289,22 @@ a words-only result; airplane mode (clear error).
 Separate a stereo song (progress card, then sliders); in a game, pause and move both sliders; "Just the music";
 remove the separation. Lyrics: paste plain lyrics with listening on (message says how many words were heard); turn
 listening off (spread over phrases); a mono song shows the mono message.
+
+## 10. Japanese songs with romaji lyrics (done)
+
+- Lane shows Japanese lyrics as **Romaji** (default), **Romaji + Japanese** (original in small type under each note) or
+  **Japanese** (Settings > Play, or the song's details, which also preview the first line).
+- Core: `Kana` (script checks, katakana → hiragana, morae), `Romaji` (Hepburn: きょ kyo, しゃ sha, っ doubles the next
+  consonant, ー repeats the vowel, ん n, small-vowel combos fa/ti/she/wi/va), `JapaneseRomanizer` (per-note romaji for a
+  line from tokenizer words: kanji readings with okurigana matched off, a word spread over several notes shared out by
+  morae, standalone は/へ/を as wa/e/o, っ across notes), `JapaneseLyrics` (morae for fitting and listening),
+  Shift-JIS detection in `TextDecoding` (needs ≥ 2 kana so accented Latin stays Windows-1252).
+- App: `JapaneseText` uses the system Japanese tokenizer (`CFStringTokenizer`, Latin transcription → hiragana) for
+  kanji readings; the display is computed once per game (`LyricDisplay`).
+- Lyrics: Japanese lyrics (LRCLIB or pasted) are fitted one mora per note; listening uses the ja-JP on-device
+  recogniser and matches heard morae to lyric morae. Romaji titles are searchable by typing or voice.
+
+### Phone checklist
+Import a Japanese UltraStar or MIDI file (Shift-JIS too): lyrics in romaji on the lane, particles as wa/e/o; switch to
+Romaji + Japanese and Japanese; a kanji line (readings); a song made from a video + Japanese lyrics from Find Lyrics
+Online, with listening on; search "sakura" for a さくら title.

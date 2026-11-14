@@ -48,16 +48,19 @@ public enum LyricAligner {
 
     /// Plain (untimed) lyrics: one line per phrase of notes, in order.
     public static func applyPlain(_ text: String, to song: Song) -> Result {
-        let lines = text.split(whereSeparator: \.isNewline)
-            .map { $0.trimmingCharacters(in: .whitespaces) }
-            .filter { !$0.isEmpty && !($0.hasPrefix("[") && $0.hasSuffix("]")) }
+        applyPlain(lines: LyricListenMatcher.lines(from: text), to: song)
+    }
+
+    /// Plain lyrics already split into lines of words (or of morae, for Japanese).
+    public static func applyPlain(lines wordLines: [[String]], to song: Song) -> Result {
+        let lines = wordLines.filter { !$0.isEmpty }
         var notes = song.notes.map { note -> SongNote in
             var copy = note
             copy.lyric = ""
             return copy
         }
         let phrases = phrases(of: notes, lineBreaks: song.lineBreaks)
-        let total = lines.reduce(0) { $0 + words($1).count }
+        let total = lines.reduce(0) { $0 + $1.count }
         var placed = 0
         var breaks: [Double] = []
         if !phrases.isEmpty, !lines.isEmpty {
@@ -66,7 +69,7 @@ public enum LyricAligner {
                 let lo = j * lines.count / phrases.count
                 let hi = (j + 1) * lines.count / phrases.count
                 guard lo < hi else { continue }
-                let lineWords = lines[lo..<hi].flatMap(words).map { LyricLine.Word(time: nil, text: $0) }
+                let lineWords = lines[lo..<hi].flatMap { $0 }.map { LyricLine.Word(time: nil, text: $0) }
                 if j > 0, let first = phrase.first { breaks.append(notes[first].start) }
                 placed += place(lineWords, timeOffset: 0, onto: phrase, of: &notes)
             }
@@ -148,11 +151,15 @@ public enum LyricAligner {
     /// Lyric text keeps a trailing space as the word boundary (UltraStar style; `displayLyric` trims it).
     private static func append(_ word: String, to note: inout SongNote) {
         let clean = String(word.prefix(40))
-        note.lyric = note.lyric.isEmpty ? clean + " " : note.lyric + clean + " "
-    }
-
-    private static func words(_ line: String) -> [String] {
-        line.split(whereSeparator: \.isWhitespace).map(String.init)
+        let current = note.lyric.trimmingCharacters(in: .whitespaces)
+        if current.isEmpty {
+            note.lyric = clean + " "
+        } else if Kana.containsJapanese(clean), let last = current.unicodeScalars.last, Kana.isKana(last) || Kana.isKanji(last) {
+            // Japanese morae on one note join without spaces (こ + こ → ここ).
+            note.lyric = current + clean + " "
+        } else {
+            note.lyric = current + " " + clean + " "
+        }
     }
 
     /// Groups of note indices: split at the song's line breaks, or at gaps of half a second.

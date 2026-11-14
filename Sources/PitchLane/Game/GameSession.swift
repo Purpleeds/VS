@@ -112,10 +112,15 @@ final class GameSession: ObservableObject {
     static let pitchLatency = 0.025
     private static let listenerName = "game"
 
-    init(song: Song, options: GameOptions) {
+    /// Text drawn on each note (romaji for Japanese songs), precomputed once.
+    let lyrics: LyricDisplay
+
+    init(song: Song, options: GameOptions, lyrics: LyricDisplay? = nil) {
         let viewport = LaneViewport(song: song)
         self.song = song
         self.options = options
+        let display = lyrics ?? .plain(song)
+        self.lyrics = display.primary.count == song.notes.count ? display : .plain(song)
         self.viewport = viewport
         noteIndex = NoteIndex(song: song)
         let scoring = Self.scoringSong(for: song, practice: options.practice)

@@ -20,13 +20,13 @@ struct GameView: View {
     @State private var started = false
     @State private var showRouteWarning = true
 
-    init(song: Song, backingURL: URL?, videoURL: URL? = nil, stems: BackingStems? = nil, options: GameOptions) {
+    init(song: Song, backingURL: URL?, videoURL: URL? = nil, stems: BackingStems? = nil, lyrics: LyricDisplay? = nil, options: GameOptions) {
         self.song = song
         self.backingURL = backingURL
         self.videoURL = videoURL
         self.stems = stems
         self.options = options
-        _session = StateObject(wrappedValue: GameSession(song: song, options: options))
+        _session = StateObject(wrappedValue: GameSession(song: song, options: options, lyrics: lyrics))
     }
 
     var body: some View {

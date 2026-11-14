@@ -162,9 +162,11 @@ enum SongListener {
     static let rate = 16_000.0
     static let chunkSeconds = 30.0
 
-    static func heardWords(in url: URL, hints: [String], progress: @escaping @Sendable (Double) -> Void) async throws -> [LyricListenMatcher.HeardWord] {
+    static func heardWords(
+        in url: URL, locale: Locale = .current, hints: [String], progress: @escaping @Sendable (Double) -> Void
+    ) async throws -> [LyricListenMatcher.HeardWord] {
         guard await VoiceSearch.authorization() == .authorized else { throw Failure.permission }
-        guard let recognizer = SFSpeechRecognizer(locale: Locale.current) ?? SFSpeechRecognizer(locale: Locale(identifier: "en-US")),
+        guard let recognizer = SFSpeechRecognizer(locale: locale) ?? SFSpeechRecognizer(locale: Locale(identifier: "en-US")),
               recognizer.isAvailable, recognizer.supportsOnDeviceRecognition else { throw Failure.unavailable }
         let samples = try await decodeMono(url)
         guard !samples.isEmpty else { throw Failure.noAudio }

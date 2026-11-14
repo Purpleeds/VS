@@ -185,6 +185,13 @@ Runs on every push and PR:
 - `BackingTrack` plays either the full mix or `BackingStems` (voice + music) on two players scheduled at the same host
   time into one stem mixer; stems are invalidated whenever the backing audio changes (`SongLibraryStore`).
 
+## Japanese lyrics (step 10)
+
+- Romaji conversion is Core (`Kana`, `Romaji`, `JapaneseRomanizer`, `JapaneseLyrics`, tested). Kanji readings come only
+  from the system tokenizer in the app (`JapaneseText`); never ship a dictionary. Song data keeps the original script;
+  romaji is computed for display (`LyricDisplay`), never written into `song.json`.
+- Japanese lyrics are fitted and matched as hiragana morae (one sung beat per note).
+
 ## Versioning
 
 - `CFBundleShortVersionString` = marketing version; `CFBundleVersion` = integer build number.

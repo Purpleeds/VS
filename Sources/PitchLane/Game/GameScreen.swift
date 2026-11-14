@@ -16,7 +16,8 @@ struct GameScreen: View {
             let song = base.transposed(by: plan.transpose)
             GameView(song: song, backingURL: library.backingAudioURL(for: base),
                      videoURL: settings.settings.showVideo ? library.videoURL(for: base) : nil,
-                     stems: library.stems(for: base), options: GameOptions(
+                     stems: library.stems(for: base),
+                     lyrics: JapaneseText.display(for: song, mode: settings.settings.japaneseLyrics), options: GameOptions(
                 difficulty: plan.difficulty,
                 octaveAgnostic: settings.settings.octaveAgnostic,
                 clickTrack: settings.settings.clickTrack,

@@ -175,12 +175,19 @@ enum LaneRenderer {
                 }
             }
 
-            let lyric = note.displayLyric
+            let lyric = index < session.lyrics.primary.count ? session.lyrics.primary[index] : note.displayLyric
             if !lyric.isEmpty {
                 let text = Text(lyric)
                     .font(.system(size: isActive ? 16 : 14, weight: isActive ? .heavy : .semibold, design: .rounded))
                     .foregroundStyle(isPast ? Theme.textSecondary.opacity(0.6) : (isActive ? Theme.gold : Theme.textPrimary))
                 context.draw(text, at: CGPoint(x: startX, y: noteY + barHeight / 2 + 3), anchor: .topLeading)
+            }
+            // "Romaji + Japanese": the original script in small type under the romaji.
+            if let secondary = session.lyrics.secondary, index < secondary.count, !secondary[index].isEmpty {
+                let original = Text(secondary[index])
+                    .font(.system(size: 11, weight: .medium))
+                    .foregroundStyle(Theme.textSecondary.opacity(isPast ? 0.5 : 0.9))
+                context.draw(original, at: CGPoint(x: startX, y: noteY + barHeight / 2 + 21), anchor: .topLeading)
             }
             if showNoteNames {
                 let name = Text(NoteNaming.name(forMIDINote: note.pitch, accidentals: accidentals))

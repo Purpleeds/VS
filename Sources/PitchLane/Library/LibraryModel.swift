@@ -59,9 +59,27 @@ final class LibraryModel: ObservableObject {
         reload()
     }
 
+    /// Romaji of Japanese titles (and artists), so they can be found by typing or saying them in Latin letters.
+    private(set) var romajiNames: [String: String] = [:]
+
+    /// Search that also matches the romaji of Japanese titles.
+    func matches(_ song: Song, query: String) -> Bool {
+        if SongSearch.matches(song, query: query) { return true }
+        guard let romaji = romajiNames[song.id] else { return false }
+        return query.split(whereSeparator: \.isWhitespace).allSatisfy {
+            romaji.range(of: String($0), options: [.caseInsensitive, .diacriticInsensitive]) != nil
+        }
+    }
+
     func reload() {
         let result = store.loadAll()
         imported = result.songs
+        var names: [String: String] = [:]
+        for song in result.songs {
+            let parts = [JapaneseText.romaji(song.title), JapaneseText.romaji(song.artist)].compactMap { $0 }
+            if !parts.isEmpty { names[song.id] = parts.joined(separator: " ") }
+        }
+        romajiNames = names
         loadFailures = result.failures
         for failure in result.failures {
             AppLog.error("Couldn't load song folder \(failure.folderName): \(failure.message)", category: "library")
@@ -471,14 +489,23 @@ final class LibraryModel: ObservableObject {
             return
         }
         let words = lyricLines(synced: synced, plain: plain).flatMap { $0 }
-        let hints = Array(Set(words.map { $0.lowercased().trimmingCharacters(in: .punctuationCharacters) }.filter { $0.count > 2 })).sorted()
+        let japanese = Kana.containsJapanese(synced ?? plain ?? "")
+        let hints: [String]
+        if japanese {
+            // Whole words help the Japanese recogniser more than single morae.
+            let text = (synced.map { LRCParser.parse($0).map(\.text).joined(separator: "\n") } ?? plain) ?? ""
+            hints = Array(Set(JapaneseText.tokens(text).map(\.text).filter { $0.count > 1 })).sorted()
+        } else {
+            hints = Array(Set(words.map { $0.lowercased().trimmingCharacters(in: .punctuationCharacters) }.filter { $0.count > 2 })).sorted()
+        }
+        let locale = japanese ? Locale(identifier: "ja-JP") : Locale.current
         songJob = SongJob(songID: song.id, title: "Listening to the song to time the words…", progress: 0)
         AppLog.info("Listening to a song to time \(words.count) lyric words (\(current.hasStems ? "voice stem" : "full mix"))", category: "lyrics")
         songJobTask = Task { [weak self] in
             var heard: [LyricListenMatcher.HeardWord]?
             var problem: String?
             do {
-                heard = try await SongListener.heardWords(in: audio, hints: hints) { [weak self] fraction in
+                heard = try await SongListener.heardWords(in: audio, locale: locale, hints: hints) { [weak self] fraction in
                     Task { @MainActor in self?.songJob?.progress = fraction }
                 }
             } catch is CancellationError {
@@ -493,23 +520,47 @@ final class LibraryModel: ObservableObject {
         }
     }
 
+    /// Lyric lines as words, or as hiragana morae for Japanese (one sung beat per note).
     private func lyricLines(synced: String?, plain: String?) -> [[String]] {
         if let synced {
-            let lines = LRCParser.parse(synced).filter { !$0.words.isEmpty }.map { $0.words.map(\.text) }
+            let lines = japaneseAware(LRCParser.parse(synced)).filter { !$0.words.isEmpty }.map { $0.words.map(\.text) }
             if lines.count >= 2 { return lines }
         }
-        return LyricListenMatcher.lines(from: plain ?? synced ?? "")
+        let text = plain ?? synced ?? ""
+        guard Kana.containsJapanese(text) else { return LyricListenMatcher.lines(from: text) }
+        return text.split(whereSeparator: \.isNewline)
+            .map { $0.trimmingCharacters(in: .whitespaces) }
+            .filter { !$0.isEmpty && !($0.hasPrefix("[") && $0.hasSuffix("]")) }
+            .map { JapaneseText.morae($0) }
+            .filter { !$0.isEmpty }
+    }
+
+    /// Timed lines with Japanese text become lines of morae (no word times; spread over the line's notes).
+    private func japaneseAware(_ lines: [LyricLine]) -> [LyricLine] {
+        lines.map { line in
+            guard Kana.containsJapanese(line.text) else { return line }
+            return LyricLine(time: line.time, text: line.text, words: JapaneseText.morae(line.text).map { LyricLine.Word(time: nil, text: $0) })
+        }
+    }
+
+    /// Heard Japanese words become timed morae, so they match the lyric morae one to one.
+    private func japaneseAware(_ heard: [LyricListenMatcher.HeardWord]) -> [LyricListenMatcher.HeardWord] {
+        guard heard.contains(where: { Kana.containsJapanese($0.text) }) else { return heard }
+        return heard.flatMap { word -> [LyricListenMatcher.HeardWord] in
+            guard Kana.containsJapanese(word.text) else { return [word] }
+            return JapaneseLyrics.heardMorae(JapaneseText.tokens(word.text), time: word.time, duration: word.duration)
+        }
     }
 
     /// Picks the best timing source (listening, then the lyrics' own timing, then phrases), fits and saves.
     private func finishLyrics(synced: String?, plain: String?, credit: String, songID: String, heard: [LyricListenMatcher.HeardWord]?, listenProblem: String?) {
         guard let current = imported.first(where: { $0.id == songID }) else { return }
-        let timedLines = synced.map { LRCParser.parse($0) } ?? []
+        let timedLines = japaneseAware(synced.map { LRCParser.parse($0) } ?? [])
         let hasTiming = timedLines.filter { !$0.words.isEmpty }.count >= 2
         var result: LyricAligner.Result?
         var how: String?
         if let heard {
-            let match = LyricListenMatcher.match(lyrics: lyricLines(synced: synced, plain: plain), heard: heard)
+            let match = LyricListenMatcher.match(lyrics: lyricLines(synced: synced, plain: plain), heard: japaneseAware(heard))
             let enough = match.matchedWords >= 3 && match.matchedFraction >= (hasTiming ? 0.25 : 0.12)
             AppLog.info(
                 "Listening heard \(heard.count) words; matched \(match.matchedWords)/\(match.totalWords) lyric words (\(enough ? "used" : "not enough"))",
@@ -529,7 +580,7 @@ final class LibraryModel: ObservableObject {
             if hasTiming {
                 result = LyricAligner.apply(lines: timedLines, to: current)
             } else {
-                result = LyricAligner.applyPlain(plain ?? synced ?? "", to: current)
+                result = LyricAligner.applyPlain(lines: lyricLines(synced: nil, plain: plain ?? synced ?? ""), to: current)
             }
         }
         guard let result else { return }

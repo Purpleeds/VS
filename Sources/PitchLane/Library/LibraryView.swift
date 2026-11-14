@@ -141,7 +141,11 @@ struct LibraryView: View {
 
     private var voiceCandidates: [VoiceQuery.Candidate] {
         BuiltInKind.allCases.map { VoiceQuery.Candidate(id: "builtin:\($0.rawValue)", title: $0.title) }
-            + library.imported.map { VoiceQuery.Candidate(id: $0.id, title: $0.title, artist: $0.artist) }
+            + library.imported.map { song in
+                // Japanese titles also match their romaji ("sakura" finds さくら).
+                VoiceQuery.Candidate(id: song.id, title: library.romajiNames[song.id] ?? song.title,
+                                     artist: library.romajiNames[song.id] == nil ? song.artist : song.title + " " + song.artist)
+            }
     }
 
     /// Spoken words: fill the search field, and open the song when one clearly matches.
@@ -169,7 +173,7 @@ struct LibraryView: View {
 
     @ViewBuilder
     private var importedSection: some View {
-        let songs = library.imported.filter { SongSearch.matches($0, query: query) }
+        let songs = library.imported.filter { library.matches($0, query: query) }
         Section("Imported") {
             if library.imported.isEmpty {
                 Text("Tap + to import UltraStar .txt or MIDI files from Files. Pick an .mp3, .m4a or .wav with it to add backing audio.")
@@ -392,6 +396,16 @@ struct SongDetailSheet: View {
                     if let credit = song.lyricsCredit {
                         LabeledContent("Lyrics", value: credit)
                     }
+                    if JapaneseText.songHasJapanese(song) {
+                        Picker("Japanese lyrics", selection: $settings.settings.japaneseLyrics) {
+                            ForEach(JapaneseLyricsMode.allCases) { mode in
+                                Text(mode.displayName).tag(mode)
+                            }
+                        }
+                        if let preview = romajiPreview(song) {
+                            LabeledContent("First line", value: preview)
+                        }
+                    }
                 }
             }
             if onPlay != nil {
@@ -483,6 +497,16 @@ struct SongDetailSheet: View {
                 dismiss()
             }
         }
+    }
+
+    /// The first lyric line as the lane will show it in romaji.
+    private func romajiPreview(_ song: Song) -> String? {
+        let display = JapaneseText.display(for: song, mode: .romaji)
+        guard let first = JapaneseRomanizer.lineGroups(for: song).first(where: { group in
+            group.contains { !display.primary[$0].isEmpty }
+        }) else { return nil }
+        let text = first.map { display.primary[$0] }.filter { !$0.isEmpty }.joined(separator: " ")
+        return text.isEmpty ? nil : String(text.prefix(80))
     }
 
     @ViewBuilder

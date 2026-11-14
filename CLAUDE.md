@@ -94,8 +94,9 @@ Runs on every push and PR:
 - Importers live in Core and must never trap on bad input: throw `SongImportError` with a line (text) or byte
   offset (binary). Every importer gets malformed-file tests (including random bytes).
 - Imported songs: `Application Support/PitchLane/Songs/<uuid>/` with `song.json`, `original.<ext>`, `backing.<ext>`.
-  Built-ins are generated in code (`BuiltInSongs`), never stored, and must stay original (no copyrighted songs or
-  lyrics).
+  Built-ins are generated in code (`BuiltInSongs`), never stored, and must be either written for PitchLane or in the
+  public domain (melody and lyrics both out of copyright, e.g. Twinkle Twinkle, Ode to Joy with Schiller's words).
+  Never add copyrighted or "free for non-commercial use" songs to the code; users import those themselves.
 
 ## Game (step 3)
 

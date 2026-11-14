@@ -45,8 +45,8 @@ struct LibraryView: View {
     var body: some View {
         List {
             importedSection
-            builtInSection(title: "Exercises", kinds: BuiltInKind.allCases.filter(\.isExercise))
-            builtInSection(title: "Melodies", kinds: BuiltInKind.allCases.filter { !$0.isExercise })
+            builtInSection(title: "Sample Songs", kinds: BuiltInKind.allCases.filter { !$0.isOriginal })
+            builtInSection(title: "PitchLane Originals", kinds: BuiltInKind.allCases.filter(\.isOriginal))
             if !library.loadFailures.isEmpty {
                 Section("Couldn't load") {
                     Text("\(library.loadFailures.count == 1 ? "A song" : "\(library.loadFailures.count) songs") couldn't be read (the file may be damaged). The details are in Settings > Logs; Erase everything in Settings removes them.")

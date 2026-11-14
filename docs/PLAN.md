@@ -342,3 +342,10 @@ home screen look and Reduce Motion; level/streak after a run; grade badges in th
 ### Phone checklist
 Import an mp3 alone (notes, then words; progress shows both stages); open the song: Heard N words; Edit Heard Words,
 fix a line, Save (lane updates); Listen Again in another language; Settings toggle off → new imports skip words.
+
+## 13. Public-domain sample songs (done)
+
+- The exercises (scales, arpeggios, intervals, long notes, sirens) are gone. "Sample Songs" in the Library: Twinkle,
+  Twinkle, Little Star; Happy Birthday to You; Ode to Joy (Schiller's German words); Jingle Bells; Mary Had a Little
+  Lamb; Row, Row, Row Your Boat; Are You Sleeping. Each is written once in `BuiltInSongs` and played slower (Easy) or
+  faster with held-vowel slides (Hard). The three PitchLane originals stay.

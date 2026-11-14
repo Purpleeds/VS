@@ -155,8 +155,9 @@ final class BuiltInSongsTests: XCTestCase {
         }
     }
 
-    func testMelodiesHaveLyricsAndSirensSlide() {
-        for kind in BuiltInKind.allCases where !kind.isExercise {
+    func testSongsHaveLyricsLinesAndHardSlides() {
+        XCTAssertEqual(BuiltInKind.allCases.filter { !$0.isOriginal }.count, 7)
+        for kind in BuiltInKind.allCases {
             for difficulty in Difficulty.allCases {
                 let song = BuiltInSongs.song(kind, difficulty)
                 let sung = song.notes.filter { !$0.slidesFromPrevious }
@@ -165,12 +166,11 @@ final class BuiltInSongsTests: XCTestCase {
             }
             XCTAssertTrue(BuiltInSongs.song(kind, .hard).notes.contains(where: \.slidesFromPrevious), "\(kind) hard has no slides")
         }
-        for difficulty in Difficulty.allCases {
-            let sirens = BuiltInSongs.song(.sirens, difficulty)
-            XCTAssertGreaterThanOrEqual(sirens.notes.filter(\.slidesFromPrevious).count, 2)
-            // A glide note starts exactly where the previous note ends.
-            for (i, note) in sirens.notes.enumerated() where note.slidesFromPrevious {
-                XCTAssertEqual(sirens.notes[i - 1].end, note.start, accuracy: 1e-9)
+        // Hard slides start exactly where the note before ends (a held vowel, not a new note).
+        for kind in BuiltInKind.allCases {
+            let hard = BuiltInSongs.song(kind, .hard)
+            for (i, note) in hard.notes.enumerated() where note.slidesFromPrevious {
+                XCTAssertEqual(hard.notes[i - 1].end, note.start, accuracy: 1e-9, hard.id)
             }
         }
     }
@@ -235,5 +235,19 @@ final class SongLibraryStoreTests: XCTestCase {
         let replaced = try store.attachBackingAudio(from: wav, to: updated)
         XCTAssertEqual(replaced.backingAudioFile, "backing.wav")
         XCTAssertFalse(FileManager.default.fileExists(atPath: store.folder(for: "s").appendingPathComponent("backing.mp3").path))
+    }
+}
+
+final class PublicDomainSongTests: XCTestCase {
+    func testWellKnownMelodiesStartRight() {
+        // First pitches and words, to catch typos in the melody tables.
+        let twinkle = BuiltInSongs.song(.twinkle, .normal)
+        XCTAssertEqual(twinkle.notes.prefix(7).map(\.pitch), [60, 60, 67, 67, 69, 69, 67])
+        XCTAssertEqual(twinkle.notes.prefix(4).map(\.displayLyric), ["Twin", "kle", "twin", "kle"])
+        XCTAssertEqual(BuiltInSongs.song(.odeToJoy, .normal).notes.prefix(8).map(\.pitch), [64, 64, 65, 67, 67, 65, 64, 62])
+        XCTAssertEqual(BuiltInSongs.song(.happyBirthday, .normal).notes.prefix(6).map(\.pitch), [67, 67, 69, 67, 72, 71])
+        XCTAssertEqual(BuiltInSongs.song(.jingleBells, .normal).notes.prefix(11).map(\.pitch), [64, 64, 64, 64, 64, 64, 64, 67, 60, 62, 64])
+        XCTAssertEqual(BuiltInSongs.song(.areYouSleeping, .normal).notes.prefix(4).map(\.pitch), [60, 62, 64, 60])
+        XCTAssertTrue(BuiltInKind.allCases.allSatisfy { !$0.title.isEmpty && !$0.subtitle.isEmpty })
     }
 }

@@ -10,6 +10,9 @@ Roadmap: `docs/PLAN.md`.
   Never suggest Xcode, `xcodebuild`, `.xcodeproj`, simulators, or anything that needs macOS.
 - **Swift Package Manager only.** No CocoaPods, no Carthage.
 - **No `Assets.xcassets`.** Colours are defined in code (`Theme.swift`). SF Symbols are fine.
+- **App icon:** `Resources/AppIcon.png` (1024², opaque, square), drawn by `scripts/make-icon.py` (Pillow); edit the script
+  and re-run it rather than editing the PNG. `xtool.yml` `iconPath` and the CI IPA workflow both copy it into the app root
+  and set `CFBundleIconFile`.
 - **No SwiftData**, and no other macros that xtool's OpenAppleMacros do not implement. Prefer plain
   `ObservableObject` / `@Published` over `@Observable`. When unsure whether a macro is supported, don't use it.
 - **Persistence = Codable JSON files in Application Support** (`Application Support/PitchLane/...`), via

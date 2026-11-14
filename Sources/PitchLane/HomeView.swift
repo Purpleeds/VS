@@ -115,11 +115,25 @@ struct HomeView: View {
 
     private var header: some View {
         VStack(spacing: 4) {
-            Image(systemName: "waveform")
-                .font(.system(size: 34, weight: .heavy))
-                .foregroundStyle(Theme.titleGradient)
-                .symbolEffect(.variableColor.iterative.reversing, options: .repeating, isActive: pulse)
-                .shadow(color: Theme.accent.opacity(0.6), radius: 10)
+            if let icon = UIImage(named: "AppIcon") {
+                // The app icon (Resources/AppIcon.png, copied into the app), gently breathing.
+                Image(uiImage: icon)
+                    .resizable()
+                    .interpolation(.high)
+                    .frame(width: 84, height: 84)
+                    .clipShape(RoundedRectangle(cornerRadius: 19, style: .continuous))
+                    .overlay(RoundedRectangle(cornerRadius: 19, style: .continuous).strokeBorder(.white.opacity(0.15), lineWidth: 1))
+                    .shadow(color: Theme.violet.opacity(0.7), radius: pulse ? 22 : 12)
+                    .scaleEffect(pulse ? 1.03 : 1)
+                    .animation(.easeInOut(duration: 1.8).repeatForever(autoreverses: true), value: pulse)
+                    .accessibilityHidden(true)
+            } else {
+                Image(systemName: "waveform")
+                    .font(.system(size: 34, weight: .heavy))
+                    .foregroundStyle(Theme.titleGradient)
+                    .symbolEffect(.variableColor.iterative.reversing, options: .repeating, isActive: pulse)
+                    .shadow(color: Theme.accent.opacity(0.6), radius: 10)
+            }
             NeonTitle(text: "PitchLane")
             Text("SING THE LINE")
                 .font(.system(.caption, design: .rounded).weight(.heavy))

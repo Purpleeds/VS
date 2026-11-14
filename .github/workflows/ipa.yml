@@ -127,6 +127,16 @@ jobs:
           test "$(pb 'Print :CADisableMinimumFrameDurationOnPhone')" = "true"
           pb "Print :NSMicrophoneUsageDescription"
           printf 'APPL????' > out/PitchLane.app/PkgInfo
+          # App icon, the same way xtool's iconPath does it (PNG in the bundle root + CFBundleIconFile).
+          test -f Resources/AppIcon.png
+          cp Resources/AppIcon.png out/PitchLane.app/AppIcon.png
+          setkey CFBundleIconFile string AppIcon
+          pb "Delete :CFBundleIcons" 2>/dev/null || true
+          pb "Add :CFBundleIcons dict"
+          pb "Add :CFBundleIcons:CFBundlePrimaryIcon dict"
+          pb "Add :CFBundleIcons:CFBundlePrimaryIcon:CFBundleIconFiles array"
+          pb "Add :CFBundleIcons:CFBundlePrimaryIcon:CFBundleIconFiles:0 string AppIcon"
+          plutil -lint "$P"
 
       - name: Package IPA
         run: |

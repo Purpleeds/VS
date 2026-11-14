@@ -46,6 +46,8 @@ final class LibraryModel: ObservableObject {
     var autoLyrics = true
     /// Mirrors Settings > "Language of new songs" (nil = detect from the singing).
     var uploadLanguage: String?
+    /// Settings > "Notes only where words are sung" (synced from `SettingsModel` by the root view).
+    var onlySungNotes = true
     private var transcriptionTask: Task<Void, Never>?
 
     let builtIns = BuiltInSongs.all
@@ -751,7 +753,23 @@ final class LibraryModel: ObservableObject {
         let script = LyricScript.detect(transcript.words.map(\.text))
         let units = LyricRomanizer.units(transcript.words, script: script)
         let lines = SongTranscript.lyricLines(from: units)
-        let result = LyricAligner.apply(lines: lines, to: current, autoOffset: false)
+        // Songs PitchLane wrote from a recording: drop the parts nobody sings words in (solos, riffs, leftover
+        // backing), so there's nothing to hum. Imported note files (UltraStar, MIDI) are never touched.
+        var base = current
+        var left: SungNoteFilter.Result?
+        if onlySungNotes, current.source == .video {
+            let filtered = SungNoteFilter.keepSung(current.notes, words: transcript.words)
+            if filtered.removedNotes > 0, filtered.notes.count >= 3 {
+                base.notes = filtered.notes
+                base.lineBreaks = MelodyTranscriber.lineBreaks(for: filtered.notes)
+                left = filtered
+                AppLog.info(
+                    "Notes without words left out: \(filtered.removedPhrases) phrases, \(filtered.removedNotes) of \(current.notes.count) notes",
+                    category: "lyrics"
+                )
+            }
+        }
+        let result = LyricAligner.apply(lines: lines, to: base, autoOffset: false)
         guard result.wordsPlaced > 0 else { return "The heard words didn't line up with any notes." }
         var updated = result.song
         let languageName = Self.listeningLanguages.first { $0.id == transcript.language }?.name ?? transcript.language
@@ -762,8 +780,13 @@ final class LibraryModel: ObservableObject {
         } catch {
             return "The words couldn't be saved (\(error.localizedDescription))."
         }
-        AppLog.info("Heard words fitted: \(result.wordsPlaced) units on \(result.notesWithWords)/\(current.notes.count) notes", category: "lyrics")
-        return "Heard \(transcript.words.count) words and put them on \(result.notesWithWords) of \(current.notes.count) notes."
+        AppLog.info("Heard words fitted: \(result.wordsPlaced) units on \(result.notesWithWords)/\(base.notes.count) notes", category: "lyrics")
+        var text = "Heard \(transcript.words.count) words and put them on \(result.notesWithWords) of \(base.notes.count) notes."
+        if let left {
+            let parts = left.removedPhrases == 1 ? "1 part" : "\(left.removedPhrases) parts"
+            text += " Left out \(parts) with no words (\(left.removedNotes) notes), so there's nothing to hum."
+        }
+        return text
     }
 
     /// Song sheet: "Write Lyrics by Listening" / "Listen Again".
@@ -928,7 +951,7 @@ final class LibraryModel: ObservableObject {
             AppLog.info("Stems ready in \(String(format: "%.1f", Date().timeIntervalSince(started))) s", category: "stems")
             message = Message(
                 title: "Voice and music separated",
-                text: "Use the Singer's voice and Music sliders (here or in the pause menu) to keep a little of the voice or the music in the background. It works best when the singer is in the middle of a stereo mix; some drums and echo can stay with the voice."
+                text: "Use the Singer's voice and Music sliders (here or in the pause menu) to keep a little of the voice or the music in the background. It works best when the singer is in the middle of a stereo mix. PitchLane follows the singer's notes, so instruments go back to the music; echo stays with the music."
             )
         } catch is CancellationError {
             AppLog.info("Separation cancelled", category: "stems")

@@ -385,3 +385,15 @@ fix a line, Save (lane updates); Listen Again in another language; Settings togg
 - **Smarter lyric matching:** distinctive words count more than fillers ("tomorrow" 3, "the" 1), and sound-alike
   spellings match ("write"/"right", "tomorow"). Heard words keep the recogniser's confidence in `transcript.json`.
 - Language detection listens to the focused voice.
+
+## 17. Separator that follows the singer; no humming (done)
+
+- **Two-pass separation** (`StemMaker`): pass 1 is the plain centre extraction, nothing written, its voice kept at
+  16 kHz for Core `VocalGuide` (sung phrases + the singer's pitch). Pass 2 is `StemSeparator(guide:)`: outside sung
+  phrases the voice mask is -20 dB; while the singer holds a known pitch only that pitch's harmonics keep the mask
+  (between them -12 dB, up to 5 kHz), so centred keys, bass, guitar and drums go to the music. Stems still add up to
+  the original exactly. Song sheet: Separate Again.
+- **Notes only where words are sung** (Core `SungNoteFilter`, Settings > "Notes only where words are sung", default
+  on): when heard words are put on a song PitchLane wrote from a recording (`SongSource.video`), phrases with no
+  words are left out and hummed lead-ins/tails over 1 s from the words are trimmed. Never applied to imported note
+  files or built-ins, nor when no words were heard. Rewrite Notes from the Voice (with the setting off) restores them.

@@ -43,6 +43,8 @@ public struct AppSettings: Codable, Equatable, Sendable {
     public var uploadLanguage: String?
     /// Vibrate on perfect notes, combo milestones and new bests.
     public var haptics: Bool
+    /// Songs PitchLane writes from a recording keep only notes where words are sung (no humming along to solos).
+    public var onlySungNotes: Bool
     /// Guide tone on for Easy/Normal (default on) and Hard (default off).
     public var guideOnEasyNormal: Bool
     public var guideOnHard: Bool
@@ -70,7 +72,8 @@ public struct AppSettings: Codable, Equatable, Sendable {
         romanizedLyrics: RomanizedLyricsMode = .romanized,
         autoLyrics: Bool = true,
         uploadLanguage: String? = nil,
-        haptics: Bool = true
+        haptics: Bool = true,
+        onlySungNotes: Bool = true
     ) {
         self.debugOverlay = debugOverlay
         self.accidentals = accidentals
@@ -95,6 +98,7 @@ public struct AppSettings: Codable, Equatable, Sendable {
         self.autoLyrics = autoLyrics
         self.uploadLanguage = uploadLanguage
         self.haptics = haptics
+        self.onlySungNotes = onlySungNotes
     }
 
     public static let noiseGateRange: ClosedRange<Double> = -65 ... -30
@@ -142,6 +146,7 @@ public struct AppSettings: Codable, Equatable, Sendable {
         case autoLyrics
         case uploadLanguage
         case haptics
+        case onlySungNotes
     }
 
     public init(from decoder: Decoder) throws {
@@ -170,6 +175,7 @@ public struct AppSettings: Codable, Equatable, Sendable {
         self.autoLyrics = container.lenient(Bool.self, forKey: .autoLyrics) ?? true
         self.uploadLanguage = container.lenient(String.self, forKey: .uploadLanguage).flatMap { $0.isEmpty ? nil : $0 }
         self.haptics = container.lenient(Bool.self, forKey: .haptics) ?? true
+        self.onlySungNotes = container.lenient(Bool.self, forKey: .onlySungNotes) ?? true
     }
 }
 

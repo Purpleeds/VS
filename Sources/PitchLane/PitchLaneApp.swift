@@ -49,6 +49,9 @@ struct RootView: View {
             .onChange(of: settings.settings.uploadLanguage, initial: true) { _, language in
                 library.uploadLanguage = language
             }
+            .onChange(of: settings.settings.onlySungNotes, initial: true) { _, on in
+                library.onlySungNotes = on
+            }
             .onChange(of: scenePhase) { _, phase in
                 switch phase {
                 case .active:

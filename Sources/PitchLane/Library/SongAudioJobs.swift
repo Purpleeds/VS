@@ -5,7 +5,9 @@ import Foundation
 import Speech
 import PitchLaneCore
 
-/// Splits a song's backing audio into a voice stem and a music stem (Core `StemSeparator`), on the phone.
+/// Splits a song's backing audio into a voice stem and a music stem (Core `StemSeparator`), on the phone, in two
+/// passes: the first (plain centre extraction, nothing written) finds where and at what pitch the singer sings
+/// (Core `VocalGuide`); the second separates again following the singer and writes the stems.
 enum StemMaker {
     enum Failure: LocalizedError {
         case noAudio
@@ -22,6 +24,8 @@ enum StemMaker {
     }
 
     static let sampleRate = 44_100.0
+    /// The first pass's voice is kept at this rate for the guide (about 4 MB per minute).
+    static let guideRate = 16_000.0
 
     /// Writes AAC stereo stems to `vocalsOut` and `musicOut` (.m4a). `progress` gets 0...1.
     static func separate(_ source: URL, vocalsOut: URL, musicOut: URL, progress: @escaping @Sendable (Double) -> Void) async throws {
@@ -31,11 +35,75 @@ enum StemMaker {
         let descriptions = try await track.load(.formatDescriptions)
         let channels = descriptions.first.flatMap { CMAudioFormatDescriptionGetStreamBasicDescription($0)?.pointee.mChannelsPerFrame } ?? 2
         guard channels >= 2 else { throw Failure.mono }
-        try run(asset: asset, track: track, duration: duration, vocalsOut: vocalsOut, musicOut: musicOut, progress: progress)
+        let started = Date()
+        let guide = try findSinger(asset: asset, track: track, duration: duration) { progress(0.35 * $0) }
+        AppLog.info(
+            "Separation guide: \(guide.singing.count) sung phrases, \(Int(guide.singingDuration)) s of singing, "
+                + "pitch known \(Int((guide.pitchedFraction * 100).rounded())) % of it (\(String(format: "%.1f", Date().timeIntervalSince(started))) s)",
+            category: "stems"
+        )
+        try write(
+            asset: asset, track: track, duration: duration, guide: guide.singing.isEmpty ? nil : guide,
+            vocalsOut: vocalsOut, musicOut: musicOut
+        ) { progress(0.35 + 0.65 * $0) }
     }
 
-    private static func run(
-        asset: AVURLAsset, track: AVAssetTrack, duration: Double, vocalsOut: URL, musicOut: URL, progress: @Sendable (Double) -> Void
+    /// Pass 1: plain separation, keeping only a 16 kHz mono copy of the voice to analyse.
+    private static func findSinger(asset: AVURLAsset, track: AVAssetTrack, duration: Double, progress: (Double) -> Void) throws -> VocalGuide {
+        let separator = StemSeparator(sampleRate: sampleRate)
+        var resampler = StreamingResampler(inputRate: sampleRate, outputRate: guideRate)
+        var voice: [Float] = []
+        voice.reserveCapacity(Int(duration * guideRate) + 1)
+        var mono: [Float] = []
+        func keep(_ out: StemSeparator.Output) {
+            guard out.count > 0 else { return }
+            if mono.count != out.count { mono = [Float](repeating: 0, count: out.count) }
+            for i in 0..<out.count { mono[i] = (out.vocalsLeft[i] + out.vocalsRight[i]) * 0.5 }
+            mono.withUnsafeBufferPointer { resampler.process($0, appendingTo: &voice) }
+        }
+        try readStereo(asset: asset, track: track, duration: duration, progress: progress) { left, right in
+            keep(separator.process(left: left, right: right))
+        }
+        keep(separator.finish())
+        if separator.isEffectivelyMono { throw Failure.mono }
+        try Task.checkCancellation()
+        return VocalGuide.analyze(voice, sampleRate: guideRate)
+    }
+
+    /// Pass 2: separation following the singer; writes the stems.
+    private static func write(
+        asset: AVURLAsset, track: AVAssetTrack, duration: Double, guide: VocalGuide?, vocalsOut: URL, musicOut: URL,
+        progress: (Double) -> Void
+    ) throws {
+        guard let format = AVAudioFormat(standardFormatWithSampleRate: sampleRate, channels: 2) else { throw Failure.unreadable("format") }
+        let settings: [String: Any] = [
+            AVFormatIDKey: kAudioFormatMPEG4AAC,
+            AVSampleRateKey: sampleRate,
+            AVNumberOfChannelsKey: 2,
+            AVEncoderBitRateKey: 192_000,
+        ]
+        try? FileManager.default.removeItem(at: vocalsOut)
+        try? FileManager.default.removeItem(at: musicOut)
+        let vocalsFile = try AVAudioFile(forWriting: vocalsOut, settings: settings, commonFormat: .pcmFormatFloat32, interleaved: false)
+        let musicFile = try AVAudioFile(forWriting: musicOut, settings: settings, commonFormat: .pcmFormatFloat32, interleaved: false)
+        let separator = StemSeparator(sampleRate: sampleRate, guide: guide)
+
+        func emit(_ out: StemSeparator.Output) throws {
+            guard out.count > 0 else { return }
+            try append(out.vocalsLeft, out.vocalsRight, to: vocalsFile, format: format)
+            try append(out.musicLeft, out.musicRight, to: musicFile, format: format)
+        }
+        try readStereo(asset: asset, track: track, duration: duration, progress: progress) { left, right in
+            try emit(separator.process(left: left, right: right))
+        }
+        try emit(separator.finish())
+        if separator.isEffectivelyMono { throw Failure.mono }
+        progress(1)
+    }
+
+    /// Decodes the track as 44.1 kHz stereo and hands it over in pieces (left, right).
+    private static func readStereo(
+        asset: AVURLAsset, track: AVAssetTrack, duration: Double, progress: (Double) -> Void, body: ([Float], [Float]) throws -> Void
     ) throws {
         let reader: AVAssetReader
         do { reader = try AVAssetReader(asset: asset) } catch { throw Failure.unreadable(error.localizedDescription) }
@@ -53,25 +121,6 @@ enum StemMaker {
         reader.add(output)
         guard reader.startReading() else { throw Failure.unreadable(reader.error?.localizedDescription ?? "reader didn't start") }
         defer { if reader.status == .reading { reader.cancelReading() } }
-
-        guard let format = AVAudioFormat(standardFormatWithSampleRate: sampleRate, channels: 2) else { throw Failure.unreadable("format") }
-        let settings: [String: Any] = [
-            AVFormatIDKey: kAudioFormatMPEG4AAC,
-            AVSampleRateKey: sampleRate,
-            AVNumberOfChannelsKey: 2,
-            AVEncoderBitRateKey: 192_000,
-        ]
-        try? FileManager.default.removeItem(at: vocalsOut)
-        try? FileManager.default.removeItem(at: musicOut)
-        let vocalsFile = try AVAudioFile(forWriting: vocalsOut, settings: settings, commonFormat: .pcmFormatFloat32, interleaved: false)
-        let musicFile = try AVAudioFile(forWriting: musicOut, settings: settings, commonFormat: .pcmFormatFloat32, interleaved: false)
-        let separator = StemSeparator(sampleRate: sampleRate)
-
-        func write(_ out: StemSeparator.Output) throws {
-            guard out.count > 0 else { return }
-            try append(out.vocalsLeft, out.vocalsRight, to: vocalsFile, format: format)
-            try append(out.musicLeft, out.musicRight, to: musicFile, format: format)
-        }
 
         var interleaved: [Float] = []
         var left: [Float] = []
@@ -99,7 +148,7 @@ enum StemMaker {
                 left[i] = interleaved[2 * i]
                 right[i] = interleaved[2 * i + 1]
             }
-            try write(separator.process(left: left, right: right))
+            try body(left, right)
             seconds += Double(frames) / sampleRate
             if seconds - reported >= 2 {
                 reported = seconds
@@ -109,9 +158,6 @@ enum StemMaker {
         if reader.status == .failed {
             throw Failure.unreadable(reader.error?.localizedDescription ?? "decoding failed")
         }
-        try write(separator.finish())
-        if separator.isEffectivelyMono { throw Failure.mono }
-        progress(1)
     }
 
     private static func append(_ left: [Float], _ right: [Float], to file: AVAudioFile, format: AVAudioFormat) throws {

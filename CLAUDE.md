@@ -212,6 +212,9 @@ Runs on every push and PR:
 - Step 16: `SongListener` runs Core `VoiceFocus` (harmonics of the sung pitch) after `VocalPrep`, recognises focused and
   plain voice, and keeps the better pass per phrase via Core `HeardWordPicker` (which also drops words over silence,
   duplicates and stuck repeats). Merging and matching rules stay in Core and tested; the app only runs recognisers.
+- Step 17: separation is two passes (plain → Core `VocalGuide` → `StemSeparator(guide:)`). `SungNoteFilter` (setting
+  `onlySungNotes`) only ever removes notes from `SongSource.video` songs, only when heard words exist, and keeps at
+  least 3 notes; never from UltraStar/MIDI imports or built-ins.
 
 ## Menu look (step 11)
 

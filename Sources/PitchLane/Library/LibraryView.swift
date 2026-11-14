@@ -661,6 +661,8 @@ struct SongDetailSheet: View {
                     Button("Rewrite Notes from the Voice", systemImage: "music.mic") { library.rewriteNotesFromVoice(song) }
                         .disabled(library.songJob != nil)
                 }
+                Button("Separate Again", systemImage: "arrow.clockwise") { library.separateStems(for: song) }
+                    .disabled(library.songJob != nil)
                 Button("Remove Separation", systemImage: "arrow.uturn.backward", role: .destructive) { confirmRemoveStems = true }
                     .disabled(library.songJob != nil)
             } else {
@@ -675,8 +677,8 @@ struct SongDetailSheet: View {
             Text("Voice and music")
         } footer: {
             Text(song.hasStems
-                 ? "These levels apply to every separated song, and you can change them in the pause menu while you sing."
-                 : "Splits the backing into the singer's voice and the music, on this phone, so you can keep a little of either in the background. Works best on stereo recordings with the singer in the middle; it takes about a tenth of the song's length.")
+                 ? "These levels apply to every separated song, and you can change them in the pause menu while you sing. Separate Again redoes the split with the latest separator."
+                 : "Splits the backing into the singer's voice and the music, on this phone, so you can keep a little of either in the background. It first finds where and on what notes the singer sings, then follows them. Works best on stereo recordings with the singer in the middle; it takes about a fifth of the song's length.")
         }
     }
 

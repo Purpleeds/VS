@@ -67,6 +67,7 @@ struct SettingsView: View {
                 Toggle("Click track", isOn: $model.settings.clickTrack)
                 Toggle("Song videos behind the lane", isOn: $model.settings.showVideo)
                 Toggle("Write lyrics for new songs by listening", isOn: $model.settings.autoLyrics)
+                Toggle("Notes only where words are sung", isOn: $model.settings.onlySungNotes)
                 Picker("Language of new songs", selection: $model.settings.uploadLanguage) {
                     ForEach(LibraryModel.listeningLanguages, id: \.name) { option in
                         Text(option.id == nil ? "Detect from the singing" : option.name).tag(option.id)
@@ -81,7 +82,7 @@ struct SettingsView: View {
             } header: {
                 Text("Play")
             } footer: {
-                Text("Difficulty is the on-pitch window. Any octave counts lets low and high voices sing every song. With failing on, too many misses empty the energy bar and end the song; practice runs can be no-fail.")
+                Text("Difficulty is the on-pitch window. Any octave counts lets low and high voices sing every song. With failing on, too many misses empty the energy bar and end the song; practice runs can be no-fail. Notes only where words are sung: songs made from your videos and recordings leave out solos and other parts with no words, so you never have to hum (turn it off and use Rewrite Notes from the Voice to get them back).")
             }
 
             Section {

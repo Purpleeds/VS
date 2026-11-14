@@ -341,7 +341,9 @@ enum SongListener {
                         heard = await recognize(voice.slice(voice.plain, segment), recognizer: recognizer, hints: hints).words
                     }
                     if !heard.isEmpty { filled += 1 }
-                    words += heard.map { HeardWord(text: $0.text, time: $0.time + segment.start, duration: $0.duration, confidence: $0.confidence) }
+                    words += heard.map {
+                        HeardWord(text: $0.text, time: $0.time + segment.start, duration: $0.duration, confidence: $0.confidence, alternatives: $0.alternatives)
+                    }
                     progress(0.6 + 0.38 * Double(step + 1) / Double(missing.count))
                 }
                 AppLog.info("Phrase-by-phrase recogniser: words in \(filled) of \(missing.count) phrases that were still empty", category: "lyrics")
@@ -365,7 +367,8 @@ enum SongListener {
     ) async throws -> [HeardWord] {
         guard let supported = await SpeechTranscriber.supportedLocale(equivalentTo: locale) else { throw Failure.unavailable }
         let transcriber = SpeechTranscriber(
-            locale: supported, transcriptionOptions: [], reportingOptions: [], attributeOptions: [.audioTimeRange, .transcriptionConfidence]
+            locale: supported, transcriptionOptions: [], reportingOptions: [.alternativeTranscriptions],
+            attributeOptions: [.audioTimeRange, .transcriptionConfidence]
         )
         if let request = try await AssetInventory.assetInstallationRequest(supporting: [transcriber]) {
             try await request.downloadAndInstall()
@@ -388,6 +391,7 @@ enum SongListener {
         let collector = Task { () -> [HeardWord] in
             var words: [HeardWord] = []
             for try await result in transcriber.results {
+                var heard: [HeardWord] = []
                 for run in result.text.runs {
                     guard let range = run.audioTimeRange else { continue }
                     let text = String(result.text[run.range].characters).trimmingCharacters(in: .whitespacesAndNewlines)
@@ -395,9 +399,16 @@ enum SongListener {
                     let start = range.start.seconds, length = range.duration.seconds
                     guard start.isFinite, length.isFinite else { continue }
                     let confidence = run.transcriptionConfidence.map { Double($0) }
-                    words.append(HeardWord(text: text, time: start, duration: max(0.05, length), confidence: confidence))
+                    heard.append(HeardWord(text: text, time: start, duration: max(0.05, length), confidence: confidence))
                     progress(min(1, (start + length) / duration))
                 }
+                // The recogniser's other readings of the same stretch become each word's alternatives.
+                var split = SongListener.splitMultiWord(heard)
+                for alternative in result.alternatives.prefix(3) {
+                    let altWords = String(alternative.characters).split(whereSeparator: \.isWhitespace).map(String.init)
+                    split = HeardWordPicker.attachAlternatives(split, alternative: altWords)
+                }
+                words += split
             }
             return words
         }
@@ -411,7 +422,7 @@ enum SongListener {
     }
 
     /// A recognised run with several words ("happy birthday") becomes one timed word each, sharing its time.
-    private static func splitMultiWord(_ words: [HeardWord]) -> [HeardWord] {
+    static func splitMultiWord(_ words: [HeardWord]) -> [HeardWord] {
         words.flatMap { word -> [HeardWord] in
             let parts = word.text.split(whereSeparator: \.isWhitespace).map(String.init)
             guard parts.count > 1 else { return [word] }
@@ -456,7 +467,8 @@ enum SongListener {
                 guard (result?.isFinal ?? false) || error != nil else { return }
                 let segments = result?.bestTranscription.segments ?? []
                 let words = segments.map {
-                    HeardWord(text: $0.substring, time: $0.timestamp, duration: $0.duration, confidence: $0.confidence > 0 ? Double($0.confidence) : nil)
+                    HeardWord(text: $0.substring, time: $0.timestamp, duration: $0.duration,
+                              confidence: $0.confidence > 0 ? Double($0.confidence) : nil, alternatives: $0.alternativeSubstrings)
                 }
                 let confidence = segments.isEmpty ? 0 : segments.reduce(0.0) { $0 + Double($1.confidence) } / Double(segments.count)
                 once.run { continuation.resume(returning: (words, confidence)) }

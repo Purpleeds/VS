@@ -47,18 +47,63 @@ public enum HeardWordPicker {
             return bySegment
         }
         for index in segments.indices {
-            var best: [HeardWord] = []
+            var bestPass: Int?
             var bestScore = 0.0
-            for pass in grouped {
+            for (number, pass) in grouped.enumerated() {
                 let s = score(pass[index])
                 if s > bestScore {
-                    best = pass[index]
+                    bestPass = number
                     bestScore = s
                 }
             }
-            picked += best
+            guard let bestPass else { continue }
+            var words = grouped[bestPass][index]
+            // What the other passes heard at the same moments becomes each word's alternatives.
+            for (number, pass) in grouped.enumerated() where number != bestPass {
+                words = withAlternatives(words, from: pass[index])
+            }
+            picked += words
         }
         return picked.sorted { $0.time < $1.time }
+    }
+
+    /// Adds, to each word, the differently heard words of `others` that overlap it in time (by at least 40 % of the
+    /// shorter of the two).
+    public static func withAlternatives(_ words: [HeardWord], from others: [HeardWord]) -> [HeardWord] {
+        guard !others.isEmpty else { return words }
+        return words.map { word in
+            let key = LyricListenMatcher.key(word.text)
+            let end = word.time + max(0.05, word.duration)
+            let overlapping = others.filter { other in
+                let otherEnd = other.time + max(0.05, other.duration)
+                let overlap = min(end, otherEnd) - max(word.time, other.time)
+                let shorter = min(end - word.time, otherEnd - other.time)
+                return overlap >= 0.4 * shorter && LyricListenMatcher.key(other.text) != key
+            }
+            guard !overlapping.isEmpty else { return word }
+            return HeardWord(text: word.text, time: word.time, duration: word.duration, confidence: word.confidence,
+                             alternatives: (word.alternatives ?? []) + overlapping.map(\.text))
+        }
+    }
+
+    /// Adds another reading of the same stretch (e.g. a recogniser's second-best transcript) as alternatives:
+    /// the two are aligned word by word (`WordAlignment`) and each word that reads differently gets the other one.
+    /// Words that run together or split apart become multi-word alternatives ("good night" for "goodnight").
+    public static func attachAlternatives(_ words: [HeardWord], alternative: [String]) -> [HeardWord] {
+        guard !words.isEmpty, !alternative.isEmpty else { return words }
+        let alignment = WordAlignment.align(words.map(\.text), alternative)
+        var extra = [[String]](repeating: [], count: words.count)
+        for pair in alignment.pairs where pair.kind != .same && pair.a < words.count && pair.b < alternative.count {
+            extra[pair.a].append(alternative[pair.b])
+        }
+        for block in alignment.blocks where block.aRange.count == 1 && block.bRange.count > 1 && block.aRange.lowerBound < words.count {
+            extra[block.aRange.lowerBound].append(block.bRange.map { alternative[$0] }.joined(separator: " "))
+        }
+        return words.enumerated().map { index, word in
+            guard !extra[index].isEmpty else { return word }
+            return HeardWord(text: word.text, time: word.time, duration: word.duration, confidence: word.confidence,
+                             alternatives: (word.alternatives ?? []) + extra[index])
+        }
     }
 
     /// Indices of phrases at least `minDuration` long in which no word was heard.

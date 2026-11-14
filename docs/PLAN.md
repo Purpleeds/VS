@@ -424,3 +424,22 @@ fix a line, Save (lane updates); Listen Again in another language; Settings togg
 - Title card (song, artist, difficulty) during the start countdown; the countdown has a draining ring.
 - HUD: glass score card with the grade so far and a glowing energy bar; the combo pill glows with the multiplier;
   glass pause button.
+
+## 20. Word predictor (done)
+
+- **Core `WordPredictor`**: an on-device statistical model (noisy channel + word-sequence model, decoded per line with
+  Viterbi) that picks the most likely sung words from what the recogniser heard. Candidates per heard word, or two or
+  three run together: the word, the recogniser's alternatives, what repeats of the line heard there, past corrections,
+  words to know, sound-alike known words. Scores: pronunciation (sound key, spelling, recogniser confidence as
+  log-odds), previous words (learned word/word-pair counts plus the rest of the song, leaving the line itself out),
+  repeats (lines alike in words or tune vote), speed (syllables against notes sung and time), habits and words to know.
+  A line changes only when the new reading wins by a margin; low-confidence words change more easily.
+- **Core `WordModel`** (`word-model.json`): words to know, word/word-pair counts from lyrics the user adds and lines
+  they correct (around each change only), and the recogniser's habits (heard → intended) from corrections and from
+  lyrics matched against what was heard (`LyricListenMatcher.Result.misheard`). Size-capped, lenient decoding.
+- **Recogniser alternatives**: `SFTranscriptionSegment.alternativeSubstrings`, `SpeechTranscriber.Result.alternatives`
+  (aligned with Core `WordAlignment` / `HeardWordPicker.attachAlternatives`) and the other listening pass
+  (`HeardWordPicker.withAlternatives`) are kept on each `HeardWord.alternatives`. Words to know are also recogniser
+  hints. `SongTranscript.rawWords` keeps what was heard so "Improve Words" can predict again later.
+- UI: Settings > Word predictor (toggle, Words to Know, learned counts, Forget What It Learned); song sheet "Improve
+  Words" and the number of words fixed.

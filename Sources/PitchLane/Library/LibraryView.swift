@@ -372,6 +372,7 @@ struct SongDetailSheet: View {
     @State private var listenForTiming = true
     @State private var listeningLanguage: String?
     @State private var editingTranscript: SongTranscript?
+    @State private var confirmImprove = false
     @State private var confirmRemoveStems = false
     @State private var confirmDelete = false
     @StateObject private var preview = TransposePreview()
@@ -586,6 +587,11 @@ struct SongDetailSheet: View {
         }) {
             PasteLyricsSheet { pastedLyrics = $0 }
         }
+        .confirmationDialog("Predict the words again?", isPresented: $confirmImprove, titleVisibility: .visible) {
+            Button("Predict Again") { library.improveHeardWords(song) }
+        } message: {
+            Text("The words are predicted again from what was heard, with everything learned since. Your hand corrections are replaced, but the predictor has learned from them.")
+        }
         .confirmationDialog("Remove the voice/music separation?", isPresented: $confirmRemoveStems, titleVisibility: .visible) {
             Button("Remove", role: .destructive) { library.removeStems(from: song) }
         } message: {
@@ -649,8 +655,15 @@ struct SongDetailSheet: View {
             if let transcript, !transcript.isEmpty {
                 LabeledContent("Heard", value: "\(transcript.words.count) words, \(transcript.lines().count) lines\(transcript.edited ? ", edited" : "")")
                 LabeledContent("When", value: transcript.createdAt.formatted(date: .abbreviated, time: .shortened))
+                if transcript.predictedChanges > 0 {
+                    LabeledContent("Word predictor", value: "\(transcript.predictedChanges) word\(transcript.predictedChanges == 1 ? "" : "s") fixed")
+                }
                 Button("Use Heard Words", systemImage: "text.badge.checkmark") { library.useHeardWords(song) }
                     .disabled(busy)
+                Button("Improve Words", systemImage: "wand.and.stars") {
+                    if transcript.edited { confirmImprove = true } else { library.improveHeardWords(song) }
+                }
+                .disabled(busy)
                 Button("Edit Heard Words…", systemImage: "pencil") { editingTranscript = transcript }
                     .disabled(busy)
                 Button("Listen Again", systemImage: "arrow.clockwise") { library.listenForWords(song, language: listeningLanguage) }
@@ -987,7 +1000,7 @@ struct TranscriptEditorSheet: View {
                         .padding(.vertical, 2)
                     }
                 } footer: {
-                    Text("Correct any line, or clear it to remove its words. Corrected words share their line's time evenly.")
+                    Text("Correct any line, or clear it to remove its words. Corrected words share their line's time evenly. The word predictor learns from your corrections.")
                 }
                 Section {
                     Button("Forget Heard Words", systemImage: "trash", role: .destructive) { confirmForget = true }

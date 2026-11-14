@@ -19,5 +19,7 @@ enum AppPaths {
     static var personalBestsFile: URL { supportDirectory.appendingPathComponent("personal-bests.json") }
     static var historyFile: URL { supportDirectory.appendingPathComponent("history.json") }
     static var latencyFile: URL { supportDirectory.appendingPathComponent("latency.json") }
+    /// What the word predictor has learned (`WordModel`).
+    static var wordModelFile: URL { supportDirectory.appendingPathComponent("word-model.json") }
 }
 #endif

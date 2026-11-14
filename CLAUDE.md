@@ -219,6 +219,16 @@ Runs on every push and PR:
   `onlySungNotes`) only ever removes notes from `SongSource.video` songs, only when heard words exist, and keeps at
   least 3 notes; never from UltraStar/MIDI imports or built-ins.
 
+## Word predictor (step 20)
+
+- Word prediction is Core and tested: `WordPredictor` (model + Viterbi), `WordModel` (what it learned), `WordAlignment`,
+  `Phonetics`. The app only collects recogniser alternatives, runs the predictor off the main thread
+  (`LibraryModel.predict`) and applies learning one change at a time (`LibraryModel.learnWords`).
+- `word-model.json` stays on the phone, is cleared by Erase everything, and is reset (words to know kept) by Forget What
+  It Learned. Never log words, lyrics or the model's contents (counts only).
+- Keep `SongTranscript.rawWords` (the recogniser's own words) separate from the predicted `words`; Improve Words
+  re-predicts from the raw words.
+
 ## Badges, daily song, library order (step 18)
 
 - Badges (`Achievements`), the song of the day (`DailySong`, built-ins only so past bonuses never change) and the

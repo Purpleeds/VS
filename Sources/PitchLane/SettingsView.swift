@@ -3,7 +3,7 @@ import SwiftUI
 import PitchLaneCore
 
 private enum ResetKind: Identifiable {
-    case settings, range, scores, latency, songs, everything
+    case settings, range, scores, latency, songs, wordModel, everything
 
     var id: Self { self }
 
@@ -14,6 +14,7 @@ private enum ResetKind: Identifiable {
         case .scores: return "Clear scores and history?"
         case .latency: return "Reset latency calibration?"
         case .songs: return "Delete all imported songs?"
+        case .wordModel: return "Forget what the word predictor learned?"
         case .everything: return "Erase everything?"
         }
     }
@@ -25,7 +26,8 @@ private enum ResetKind: Identifiable {
         case .scores: return "Personal bests, play history and stats are deleted."
         case .latency: return "Calibration and fine-tuning for every output (speaker, wired, Bluetooth) are removed."
         case .songs: return "Imported songs, their backing audio and their scores are deleted. Built-in songs stay."
-        case .everything: return "Settings, range, scores, history, latency calibration, imported songs and the logs are all deleted. This can't be undone."
+        case .wordModel: return "What it learned from your lyrics and corrections is deleted. Your words to know stay."
+        case .everything: return "Settings, range, scores, history, latency calibration, imported songs, what the word predictor learned and the logs are all deleted. This can't be undone."
         }
     }
 
@@ -36,6 +38,7 @@ private enum ResetKind: Identifiable {
         case .scores: return "Clear scores"
         case .latency: return "Reset calibration"
         case .songs: return "Delete songs"
+        case .wordModel: return "Forget"
         case .everything: return "Erase everything"
         }
     }
@@ -132,6 +135,21 @@ struct SettingsView: View {
                 Text("A lower gate hears quieter notes but may pick up room noise. Instrument mode widens the pitch range to about 40 Hz–2 kHz for trombone, sax, clarinet and similar.")
             }
 
+            Section {
+                Toggle("Predict words after listening", isOn: $model.settings.predictWords)
+                NavigationLink {
+                    WordsToKnowView()
+                } label: {
+                    LabeledContent("Words to know", value: "\(library.wordModel.customWords.count)")
+                }
+                LabeledContent("Learned from", value: "\(library.wordModel.lyricsLearned) lyrics, \(library.wordModel.correctionsLearned) corrections")
+                Button("Forget What It Learned", role: .destructive) { resetKind = .wordModel }
+            } header: {
+                Text("Word predictor")
+            } footer: {
+                Text("After listening, a small model on this phone picks the words that were most likely sung, from how they sound, the words around them, lines that repeat (and their tune), how many notes were sung, and what it has learned: lyrics you add, lines you correct in Edit Heard Words, and your words to know. Everything stays on this phone.")
+            }
+
             Section("Display") {
                 Toggle("Show FPS in games", isOn: $model.settings.showFPS)
                 Toggle("Debug overlay", isOn: $model.settings.debugOverlay)
@@ -146,6 +164,8 @@ struct SettingsView: View {
                       systemImage: "waveform")
                 Label("Find Lyrics Online sends only the song name you search for to lrclib.net. Nothing else goes online.",
                       systemImage: "network")
+                Label("The word predictor learns from your lyrics and corrections on this phone only; what it learns is never sent anywhere.",
+                      systemImage: "brain")
                 Label("The microphone is only on during the tuner, games, practice, calibration and voice search; the orange dot shows when.",
                       systemImage: "circle.fill")
             } header: {
@@ -207,12 +227,15 @@ struct SettingsView: View {
             latency.resetAll()
         case .songs:
             deleteSongs()
+        case .wordModel:
+            library.forgetLearnedWords()
         case .everything:
             model.settings = AppSettings()
             scores.resetAll()
             latency.resetAll()
             deleteSongs()
             library.eraseSongStorage()
+            library.eraseWordModel()
             AppLog.clear()
         }
     }

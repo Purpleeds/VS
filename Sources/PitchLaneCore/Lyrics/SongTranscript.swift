@@ -25,17 +25,27 @@ public struct SongTranscript: Codable, Sendable, Equatable {
     public var words: [LyricListenMatcher.HeardWord]
     /// True once the user has corrected lines by hand.
     public var edited: Bool
+    /// What the recogniser heard before the word predictor tidied it (nil when the predictor didn't run), so the
+    /// prediction can be redone later with what it has learned since.
+    public var rawWords: [LyricListenMatcher.HeardWord]?
+    /// Words the word predictor changed.
+    public var predictedChanges: Int
 
-    public init(language: String, source: String, words: [LyricListenMatcher.HeardWord], createdAt: Date = Date(), edited: Bool = false) {
+    public init(
+        language: String, source: String, words: [LyricListenMatcher.HeardWord], createdAt: Date = Date(), edited: Bool = false,
+        rawWords: [LyricListenMatcher.HeardWord]? = nil, predictedChanges: Int = 0
+    ) {
         version = Self.currentVersion
         self.language = language
         self.source = source
         self.words = Self.clean(words)
         self.createdAt = createdAt
         self.edited = edited
+        self.rawWords = rawWords.map(Self.clean)
+        self.predictedChanges = max(0, predictedChanges)
     }
 
-    private enum CodingKeys: String, CodingKey { case version, language, createdAt, source, words, edited }
+    private enum CodingKeys: String, CodingKey { case version, language, createdAt, source, words, edited, rawWords, predictedChanges }
 
     public init(from decoder: Decoder) throws {
         let c = try decoder.container(keyedBy: CodingKeys.self)
@@ -46,6 +56,9 @@ public struct SongTranscript: Codable, Sendable, Equatable {
         let lossy = (try? c.decodeIfPresent([Lossy<LyricListenMatcher.HeardWord>].self, forKey: .words)) ?? nil
         words = Self.clean((lossy ?? []).compactMap(\.value))
         edited = c.lenient(Bool.self, forKey: .edited) ?? false
+        let raw = (try? c.decodeIfPresent([Lossy<LyricListenMatcher.HeardWord>].self, forKey: .rawWords)) ?? nil
+        rawWords = raw.map { Self.clean($0.compactMap(\.value)) }
+        predictedChanges = max(0, c.lenient(Int.self, forKey: .predictedChanges) ?? 0)
     }
 
     /// Finite, sensible, sorted, non-empty words; durations at least 50 ms and never past the next word's start.
@@ -55,7 +68,7 @@ public struct SongTranscript: Codable, Sendable, Equatable {
             .map {
                 LyricListenMatcher.HeardWord(
                     text: $0.text.trimmingCharacters(in: .whitespacesAndNewlines), time: $0.time,
-                    duration: max(0.05, min(10, $0.duration)), confidence: $0.confidence
+                    duration: max(0.05, min(10, $0.duration)), confidence: $0.confidence, alternatives: $0.alternatives
                 )
             }
             .filter { !$0.text.isEmpty }

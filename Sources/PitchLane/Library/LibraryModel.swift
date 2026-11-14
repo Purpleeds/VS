@@ -48,6 +48,13 @@ final class LibraryModel: ObservableObject {
     var uploadLanguage: String?
     /// Settings > "Notes only where words are sung" (synced from `SettingsModel` by the root view).
     var onlySungNotes = true
+    /// Settings > Word predictor > "Predict words after listening" (synced by the root view).
+    var predictWords = true
+    /// What the word predictor has learned on this phone (Core `WordModel`, `word-model.json`).
+    @Published private(set) var wordModel = WordModel()
+    private let wordModelStore = JSONFileStore<WordModel>(url: AppPaths.wordModelFile, compact: true)
+    /// Learning runs one change at a time, off the main thread.
+    private var learning: Task<Void, Never>?
     private var transcriptionTask: Task<Void, Never>?
 
     let builtIns = BuiltInSongs.all
@@ -66,6 +73,11 @@ final class LibraryModel: ObservableObject {
 
     init() {
         try? FileManager.default.removeItem(at: Self.importTempDirectory)
+        let loaded = wordModelStore.loadOrQuarantine()
+        wordModel = loaded.value ?? WordModel()
+        if let problem = loaded.problem {
+            AppLog.error("Word predictor model unreadable, starting fresh: \(problem)", category: "lyrics")
+        }
         reload()
     }
 
@@ -553,7 +565,7 @@ final class LibraryModel: ObservableObject {
         }
         let words = lyricLines(synced: synced, plain: plain).flatMap { $0 }
         let script = LyricScript.detect([synced ?? plain ?? ""])
-        let hints: [String]
+        var hints: [String]
         if script != .other {
             // Whole words help the Japanese, Korean or Chinese recogniser more than single syllables.
             let text = (synced.map { LRCParser.parse($0).map(\.text).joined(separator: "\n") } ?? plain) ?? ""
@@ -561,6 +573,7 @@ final class LibraryModel: ObservableObject {
         } else {
             hints = Array(Set(words.map { $0.lowercased().trimmingCharacters(in: .punctuationCharacters) }.filter { $0.count > 2 })).sorted()
         }
+        hints = wordModel.customWords + hints
         let languageID = script.speechLocaleIdentifier ?? listeningLanguage(for: current, chosen: nil)
             ?? SongListener.identifier(Locale.current)
         let locale = Locale(identifier: languageID)
@@ -649,9 +662,15 @@ final class LibraryModel: ObservableObject {
         let hasTiming = timedLines.filter { !$0.words.isEmpty }.count >= 2
         var result: LyricAligner.Result?
         var how: String?
+        let lyricWords = lyricLines(synced: synced, plain: plain)
+        learnWords("lyrics") { $0.learn(lines: lyricWords) }
         if let heard {
-            let match = LyricListenMatcher.match(lyrics: lyricLines(synced: synced, plain: plain), heard: japaneseAware(heard))
+            let match = LyricListenMatcher.match(lyrics: lyricWords, heard: japaneseAware(heard))
             let enough = match.matchedWords >= 3 && match.matchedFraction >= (hasTiming ? 0.25 : 0.12)
+            if enough, !match.misheard.isEmpty {
+                let misheard = match.misheard.map { (heard: $0.heard, intended: $0.lyric) }
+                learnWords("\(misheard.count) misheard words") { $0.learnCorrections(misheard) }
+            }
             AppLog.info(
                 "Listening heard \(heard.count) words; matched \(match.matchedWords)/\(match.totalWords) lyric words (\(enough ? "used" : "not enough"))",
                 category: "lyrics"
@@ -728,16 +747,23 @@ final class LibraryModel: ObservableObject {
         let languageID = listeningLanguage(for: song, chosen: language)
         AppLog.info("Listening for words (\(languageID ?? "detect"), \(stems != nil ? "voice stem" : "full mix"))", category: "lyrics")
         do {
-            let hints = Array(Set(song.title.split(whereSeparator: \.isWhitespace).map(String.init).filter { $0.count > 2 })).sorted()
+            let titleWords = Array(Set(song.title.split(whereSeparator: \.isWhitespace).map(String.init).filter { $0.count > 2 })).sorted()
+            let hints = wordModel.customWords + titleWords
             let heard = try await SongListener.heardWords(in: audio, locale: languageID.map { Locale(identifier: $0) }, hints: hints, progress: progress)
-            let transcript = SongTranscript(language: heard.language, source: stems != nil ? "voice" : "mix", words: heard.words)
+            let predicted = await predict(heard.words, notes: song.notes)
+            let transcript = SongTranscript(
+                language: heard.language, source: stems != nil ? "voice" : "mix", words: predicted.words,
+                rawWords: predictWords ? heard.words : nil, predictedChanges: predicted.changed
+            )
             try store.saveTranscript(transcript, for: song)
             transcripts[song.id] = transcript
             AppLog.info("Heard \(transcript.words.count) words (\(transcript.lines().count) lines)", category: "lyrics")
             guard !transcript.isEmpty else {
                 return "No words could be recognised. Try Separate Voice and Music first, or another listening language."
             }
-            return applyTranscript(transcript, to: song.id)
+            var text = applyTranscript(transcript, to: song.id)
+            if predicted.changed > 0 { text += " The word predictor fixed \(predicted.changed) of them." }
+            return text
         } catch is CancellationError {
             return "Listening was cancelled."
         } catch {
@@ -865,8 +891,12 @@ final class LibraryModel: ObservableObject {
         message = Message(title: "Heard words", text: applyTranscript(transcript, to: song.id))
     }
 
-    /// Saves hand-corrected heard words and puts them on the notes.
+    /// Saves hand-corrected heard words and puts them on the notes; the word predictor learns from the changes.
     func saveEditedTranscript(_ transcript: SongTranscript, for song: Song) {
+        if let before = transcripts[song.id] {
+            let heard = before.words.map(\.text), corrected = transcript.words.map(\.text)
+            learnWords("an edit") { $0.learnEdit(heard: heard, corrected: corrected) }
+        }
         do {
             try store.saveTranscript(transcript, for: song)
             transcripts[song.id] = transcript
@@ -874,6 +904,89 @@ final class LibraryModel: ObservableObject {
             message = Message(title: "Words updated", text: applyTranscript(transcript, to: song.id))
         } catch {
             message = Message(title: "Couldn't save the words", text: error.localizedDescription)
+        }
+    }
+
+    /// Song sheet "Improve Words": predicts the words again from what was heard, with everything learned since.
+    func improveHeardWords(_ song: Song) {
+        guard songJobTask == nil, let transcript = transcripts[song.id] else { return }
+        let raw = transcript.rawWords ?? transcript.words
+        let notes = (imported.first { $0.id == song.id } ?? song).notes
+        let model = wordModel
+        songJob = SongJob(songID: song.id, title: "Predicting the words…", progress: 0.5)
+        songJobTask = Task { [weak self] in
+            let predicted = await Task.detached(priority: .userInitiated) { WordPredictor.predict(raw, notes: notes, model: model) }.value
+            guard let self else { return }
+            self.endSongJob()
+            let improved = SongTranscript(
+                language: transcript.language, source: transcript.source, words: predicted.words, createdAt: transcript.createdAt,
+                rawWords: raw, predictedChanges: predicted.changed
+            )
+            self.remember(improved, for: song.id)
+            AppLog.info("Word predictor (again): \(predicted.changed) of \(raw.count) words changed", category: "lyrics")
+            let text = self.applyTranscript(improved, to: song.id)
+            self.message = Message(
+                title: "Words predicted",
+                text: "The word predictor changed \(predicted.changed) of \(raw.count) heard words. " + text
+            )
+        }
+    }
+
+    /// Runs the word predictor (when it's on) over heard words, off the main thread.
+    private func predict(_ words: [LyricListenMatcher.HeardWord], notes: [SongNote]) async -> WordPredictor.Result {
+        guard predictWords, !words.isEmpty else { return WordPredictor.Result(words: words, changed: 0) }
+        let model = wordModel
+        let result = await Task.detached(priority: .userInitiated) { WordPredictor.predict(words, notes: notes, model: model) }.value
+        AppLog.info("Word predictor: \(result.changed) of \(words.count) words changed", category: "lyrics")
+        return result
+    }
+
+    // MARK: Word predictor learning
+
+    /// Settings > Word predictor > Words to know.
+    func addWordToKnow(_ word: String) {
+        learnWords("a word to know") { _ = $0.addCustomWord(word) }
+    }
+
+    func removeWordToKnow(_ word: String) {
+        learnWords("a removed word") { $0.removeCustomWord(word) }
+    }
+
+    /// Settings > Word predictor > Forget What It Learned (keeps the words to know).
+    func forgetLearnedWords() {
+        learnWords("nothing (forgot what it learned)") { $0.forgetLearned() }
+    }
+
+    /// Erase everything: the whole model, words to know included.
+    func eraseWordModel() {
+        learnWords("nothing (erased)") { $0 = WordModel() }
+    }
+
+    /// Applies a change to the word model in the background, one change after another, then saves it.
+    /// Logs only counts, never words.
+    private func learnWords(_ what: String, _ change: @escaping @Sendable (inout WordModel) -> Void) {
+        let previous = learning
+        learning = Task { [weak self] in
+            await previous?.value
+            guard let self else { return }
+            let start = self.wordModel
+            let store = self.wordModelStore
+            let updated = await Task.detached(priority: .utility) { () -> WordModel in
+                var model = start
+                change(&model)
+                do {
+                    try store.save(model)
+                } catch {
+                    AppLog.error("Saving the word predictor model failed: \(error.localizedDescription)", category: "lyrics")
+                }
+                return model
+            }.value
+            self.wordModel = updated
+            AppLog.info(
+                "Word predictor learned \(what): \(updated.unigrams.count) words, \(updated.correctionsLearned) corrections, "
+                    + "\(updated.customWords.count) words to know",
+                category: "lyrics"
+            )
         }
     }
 

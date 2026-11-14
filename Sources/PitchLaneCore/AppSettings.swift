@@ -49,6 +49,8 @@ public struct AppSettings: Codable, Equatable, Sendable {
     public var favoriteSongs: [String]
     /// How the Library orders imported songs.
     public var librarySort: LibrarySort
+    /// Run the word predictor (`WordPredictor`) over words heard by listening.
+    public var predictWords: Bool
     /// Guide tone on for Easy/Normal (default on) and Hard (default off).
     public var guideOnEasyNormal: Bool
     public var guideOnHard: Bool
@@ -79,7 +81,8 @@ public struct AppSettings: Codable, Equatable, Sendable {
         haptics: Bool = true,
         onlySungNotes: Bool = true,
         favoriteSongs: [String] = [],
-        librarySort: LibrarySort = .title
+        librarySort: LibrarySort = .title,
+        predictWords: Bool = true
     ) {
         self.debugOverlay = debugOverlay
         self.accidentals = accidentals
@@ -107,6 +110,7 @@ public struct AppSettings: Codable, Equatable, Sendable {
         self.onlySungNotes = onlySungNotes
         self.favoriteSongs = Self.cleanFavorites(favoriteSongs)
         self.librarySort = librarySort
+        self.predictWords = predictWords
     }
 
     public static let noiseGateRange: ClosedRange<Double> = -65 ... -30
@@ -178,6 +182,7 @@ public struct AppSettings: Codable, Equatable, Sendable {
         case onlySungNotes
         case favoriteSongs
         case librarySort
+        case predictWords
     }
 
     public init(from decoder: Decoder) throws {
@@ -210,6 +215,7 @@ public struct AppSettings: Codable, Equatable, Sendable {
         let favorites = (try? container.decodeIfPresent([Lossy<String>].self, forKey: .favoriteSongs)) ?? nil
         self.favoriteSongs = Self.cleanFavorites((favorites ?? []).compactMap(\.value))
         self.librarySort = container.lenient(LibrarySort.self, forKey: .librarySort) ?? .title
+        self.predictWords = container.lenient(Bool.self, forKey: .predictWords) ?? true
     }
 }
 

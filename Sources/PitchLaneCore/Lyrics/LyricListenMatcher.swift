@@ -15,12 +15,27 @@ public enum LyricListenMatcher {
         public var duration: Double
         /// The recogniser's confidence in the word (0...1), when it gave one.
         public var confidence: Double?
+        /// Other things the recogniser (or another listening pass) thought it might be, best first.
+        public var alternatives: [String]?
 
-        public init(text: String, time: Double, duration: Double = 0.3, confidence: Double? = nil) {
+        public init(text: String, time: Double, duration: Double = 0.3, confidence: Double? = nil, alternatives: [String]? = nil) {
             self.text = text
             self.time = time
             self.duration = duration
             self.confidence = confidence.flatMap { $0.isFinite ? min(1, max(0, $0)) : nil }
+            self.alternatives = Self.cleanAlternatives(alternatives, besides: text)
+        }
+
+        public static let maxAlternatives = 6
+
+        /// Non-empty, different from the word itself, unique, at most `maxAlternatives`; nil when none are left.
+        static func cleanAlternatives(_ alternatives: [String]?, besides text: String) -> [String]? {
+            guard let alternatives else { return nil }
+            var seen: Set<String> = [LyricListenMatcher.key(text)]
+            let kept = alternatives
+                .map { $0.trimmingCharacters(in: .whitespacesAndNewlines) }
+                .filter { !$0.isEmpty && $0.count <= 60 && seen.insert(LyricListenMatcher.key($0)).inserted }
+            return kept.isEmpty ? nil : Array(kept.prefix(maxAlternatives))
         }
     }
 
@@ -29,8 +44,21 @@ public enum LyricListenMatcher {
         public var lines: [LyricLine]
         public var matchedWords: Int
         public var totalWords: Int
+        /// Matched words that were heard differently from the lyrics (heard text, lyric text), e.g. ("tomorow",
+        /// "tomorrow"): what the word predictor learns the recogniser's habits from.
+        public var misheard: [Misheard] = []
 
         public var matchedFraction: Double { totalWords > 0 ? Double(matchedWords) / Double(totalWords) : 0 }
+    }
+
+    public struct Misheard: Sendable, Equatable {
+        public var heard: String
+        public var lyric: String
+
+        public init(heard: String, lyric: String) {
+            self.heard = heard
+            self.lyric = lyric
+        }
     }
 
     static let maximumWords = 1_500
@@ -61,6 +89,7 @@ public enum LyricListenMatcher {
         let rows = words.count, cols = spokenKeys.count
         var times = [Double?](repeating: nil, count: rows)
         var matched = 0
+        var misheard: [Misheard] = []
 
         if rows > 0, cols > 0 {
             // score[(i)*(cols+1)+j] = best score aligning the first i lyric words with the first j heard words.
@@ -80,6 +109,9 @@ public enum LyricListenMatcher {
                 if s > 0, score[i * width + j] == score[(i - 1) * width + j - 1] + Int32(s) {
                     times[i - 1] = spoken[j - 1].time
                     matched += 1
+                    if words[i - 1].key != spokenKeys[j - 1] {
+                        misheard.append(Misheard(heard: spoken[j - 1].text, lyric: words[i - 1].text))
+                    }
                     i -= 1
                     j -= 1
                 } else if score[(i - 1) * width + j] >= score[i * width + j - 1] {
@@ -104,7 +136,7 @@ public enum LyricListenMatcher {
                 currentLine = word.line
             }
         }
-        return Result(lines: result, matchedWords: matched, totalWords: words.count)
+        return Result(lines: result, matchedWords: matched, totalWords: words.count, misheard: Array(misheard.reversed()))
     }
 
     /// Fills gaps between known times linearly, extrapolates the ends, and keeps the times non-decreasing.

@@ -52,6 +52,9 @@ struct RootView: View {
             .onChange(of: settings.settings.onlySungNotes, initial: true) { _, on in
                 library.onlySungNotes = on
             }
+            .onChange(of: settings.settings.predictWords, initial: true) { _, on in
+                library.predictWords = on
+            }
             .onChange(of: scenePhase) { _, phase in
                 switch phase {
                 case .active:

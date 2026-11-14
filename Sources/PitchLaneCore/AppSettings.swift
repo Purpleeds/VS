@@ -37,6 +37,8 @@ public struct AppSettings: Codable, Equatable, Sendable {
     public var musicStemVolume: Double
     /// How songs with Japanese, Korean or Chinese lyrics show their words on the lane.
     public var romanizedLyrics: RomanizedLyricsMode
+    /// New songs made from a video or audio file also get their words by listening.
+    public var autoLyrics: Bool
     /// Guide tone on for Easy/Normal (default on) and Hard (default off).
     public var guideOnEasyNormal: Bool
     public var guideOnHard: Bool
@@ -61,7 +63,8 @@ public struct AppSettings: Codable, Equatable, Sendable {
         showVideo: Bool = true,
         voiceStemVolume: Double = 0.3,
         musicStemVolume: Double = 1,
-        romanizedLyrics: RomanizedLyricsMode = .romanized
+        romanizedLyrics: RomanizedLyricsMode = .romanized,
+        autoLyrics: Bool = true
     ) {
         self.debugOverlay = debugOverlay
         self.accidentals = accidentals
@@ -83,6 +86,7 @@ public struct AppSettings: Codable, Equatable, Sendable {
         self.voiceStemVolume = voiceStemVolume
         self.musicStemVolume = musicStemVolume
         self.romanizedLyrics = romanizedLyrics
+        self.autoLyrics = autoLyrics
     }
 
     public static let noiseGateRange: ClosedRange<Double> = -65 ... -30
@@ -127,6 +131,7 @@ public struct AppSettings: Codable, Equatable, Sendable {
         case voiceStemVolume
         case musicStemVolume
         case romanizedLyrics = "japaneseLyrics"
+        case autoLyrics
     }
 
     public init(from decoder: Decoder) throws {
@@ -152,6 +157,7 @@ public struct AppSettings: Codable, Equatable, Sendable {
         self.voiceStemVolume = min(1, max(0, container.lenient(Double.self, forKey: .voiceStemVolume) ?? 0.3))
         self.musicStemVolume = min(1, max(0, container.lenient(Double.self, forKey: .musicStemVolume) ?? 1))
         self.romanizedLyrics = container.lenient(RomanizedLyricsMode.self, forKey: .romanizedLyrics) ?? .romanized
+        self.autoLyrics = container.lenient(Bool.self, forKey: .autoLyrics) ?? true
     }
 }
 

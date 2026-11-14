@@ -7,7 +7,7 @@ import Foundation
 /// the rest are interpolated between their neighbours. Singing is hard for speech recognition, so even a third
 /// of the words matched is plenty to pin every line down.
 public enum LyricListenMatcher {
-    public struct HeardWord: Sendable, Equatable {
+    public struct HeardWord: Sendable, Equatable, Codable {
         public var text: String
         public var time: Double
         public var duration: Double

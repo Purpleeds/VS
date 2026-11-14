@@ -117,7 +117,25 @@ public struct SongLibraryStore: Sendable {
             try? fileManager.removeItem(at: staleStems.vocals)
             try? fileManager.removeItem(at: staleStems.music)
         }
+        // So were the heard words.
+        deleteTranscript(for: song)
         return updated
+    }
+
+    public static let transcriptName = "transcript.json"
+
+    /// The words heard in the song (nil when it was never listened to, or the file is unreadable).
+    public func loadTranscript(for song: Song) -> SongTranscript? {
+        let url = folder(for: song.id).appendingPathComponent(Self.transcriptName)
+        return try? JSONFileStore<SongTranscript>(url: url, compact: true).load()
+    }
+
+    public func saveTranscript(_ transcript: SongTranscript, for song: Song) throws {
+        try JSONFileStore<SongTranscript>(url: folder(for: song.id).appendingPathComponent(Self.transcriptName), compact: true).save(transcript)
+    }
+
+    public func deleteTranscript(for song: Song) {
+        try? FileManager.default.removeItem(at: folder(for: song.id).appendingPathComponent(Self.transcriptName))
     }
 
     public static let vocalsStemName = "stem-vocals.m4a"

@@ -269,3 +269,23 @@ turn videos off in Settings; a game at 120 fps with sparks, bursts, combo flash;
 Library mic: say "play Major Scale" (opens it), say a nonsense name (fills search); deny speech permission (message);
 song made from a video: Find Lyrics Online, pick a timed result (words on the notes, line breaks, shift message);
 a words-only result; airplane mode (clear error).
+
+## 9. Lyrics by listening + voice/music slider (done)
+
+- **Time lyrics by listening** (song sheet > Lyrics, toggle on by default when the song has audio): on-device speech
+  recognition (`SongListener`: 16 kHz mono, 30 s pieces, `requiresOnDeviceRecognition`, the lyric words as
+  contextual hints) on the voice stem if the song is separated, else the full backing. Core `LyricListenMatcher`
+  aligns heard words to lyric words (DP: exact 2, near miss 1), interpolates the rest, and the timed lines go through
+  `LyricAligner`. Used when ≥ 3 words and ≥ 25 % (timed lyrics) / 12 % (plain) match; otherwise falls back.
+  Works for LRCLIB results and for **Type or Paste Lyrics…** (plain or LRC; nothing goes online).
+- **Voice and music slider** (song sheet > Voice and music, and the pause menu): **Separate Voice and Music** runs Core
+  `StemSeparator` (stereo centre extraction: 2048-point STFT, packed L+iR FFT, mask from inter-channel coherence in the
+  vocal band, smoothed; music = mix − voice) and writes AAC stems `stem-vocals.m4a` / `stem-music.m4a`. The game plays
+  both on two sample-locked players into a stem mixer → time-pitch; "Singer's voice" and "Music" sliders
+  (`AppSettings.voiceStemVolume` 0.3 / `musicStemVolume` 1.0). Mono recordings are refused. Replacing the backing
+  audio deletes stale stems.
+
+### Phone checklist
+Separate a stereo song (progress card, then sliders); in a game, pause and move both sliders; "Just the music";
+remove the separation. Lyrics: paste plain lyrics with listening on (message says how many words were heard); turn
+listening off (spread over phrases); a mono song shows the mono message.

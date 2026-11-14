@@ -35,6 +35,8 @@ final class LibraryModel: ObservableObject {
     }
 
     @Published private(set) var transcription: Transcription?
+    @Published private(set) var songJob: SongJob?
+    private var songJobTask: Task<Void, Never>?
     private var transcriptionQueue: [(url: URL, title: String)] = []
     private var transcriptionTask: Task<Void, Never>?
 
@@ -448,46 +450,189 @@ final class LibraryModel: ObservableObject {
         return ids
     }
 
-    /// Fits looked-up lyrics onto the song's notes and saves. Returns false (with a message) if nothing fitted.
-    @discardableResult
-    func applyLyrics(_ candidate: LyricsCandidate, to song: Song) -> Bool {
+    // MARK: Lyrics
+
+    /// Lyrics picked from LRCLIB. With `listen`, the words are timed by listening to the song first.
+    func applyLyrics(_ candidate: LyricsCandidate, to song: Song, listen: Bool) {
+        applyLyrics(synced: candidate.syncedLyrics, plain: candidate.plainLyrics, credit: "LRCLIB: \(candidate.credit)", to: song, listen: listen)
+    }
+
+    /// Lyrics typed or pasted by the user (plain text, or LRC with time tags).
+    func applyPastedLyrics(_ text: String, to song: Song, listen: Bool) {
+        let timed = LRCParser.parse(text).filter { !$0.words.isEmpty }.count >= 2
+        applyLyrics(synced: timed ? text : nil, plain: timed ? nil : text, credit: "Your lyrics", to: song, listen: listen)
+    }
+
+    private func applyLyrics(synced: String?, plain: String?, credit: String, to song: Song, listen: Bool) {
         let current = imported.first { $0.id == song.id } ?? song
-        let result: LyricAligner.Result
-        if let synced = candidate.syncedLyrics, LRCParser.parse(synced).filter({ !$0.words.isEmpty }).count >= 2 {
-            result = LyricAligner.apply(lines: LRCParser.parse(synced), to: current)
-        } else {
-            result = LyricAligner.applyPlain(candidate.plainLyrics ?? candidate.syncedLyrics ?? "", to: current)
+        let audio = store.stemURLs(for: current)?.vocals ?? store.backingAudioURL(for: current)
+        guard listen, let audio, songJobTask == nil else {
+            finishLyrics(synced: synced, plain: plain, credit: credit, songID: song.id, heard: nil, listenProblem: nil)
+            return
         }
+        let words = lyricLines(synced: synced, plain: plain).flatMap { $0 }
+        let hints = Array(Set(words.map { $0.lowercased().trimmingCharacters(in: .punctuationCharacters) }.filter { $0.count > 2 })).sorted()
+        songJob = SongJob(songID: song.id, title: "Listening to the song to time the words…", progress: 0)
+        AppLog.info("Listening to a song to time \(words.count) lyric words (\(current.hasStems ? "voice stem" : "full mix"))", category: "lyrics")
+        songJobTask = Task { [weak self] in
+            var heard: [LyricListenMatcher.HeardWord]?
+            var problem: String?
+            do {
+                heard = try await SongListener.heardWords(in: audio, hints: hints) { [weak self] fraction in
+                    Task { @MainActor in self?.songJob?.progress = fraction }
+                }
+            } catch is CancellationError {
+                self?.endSongJob()
+                return
+            } catch {
+                problem = error.localizedDescription
+                AppLog.warning("Listening for lyrics failed: \(error.localizedDescription)", category: "lyrics")
+            }
+            self?.endSongJob()
+            self?.finishLyrics(synced: synced, plain: plain, credit: credit, songID: song.id, heard: heard, listenProblem: problem)
+        }
+    }
+
+    private func lyricLines(synced: String?, plain: String?) -> [[String]] {
+        if let synced {
+            let lines = LRCParser.parse(synced).filter { !$0.words.isEmpty }.map { $0.words.map(\.text) }
+            if lines.count >= 2 { return lines }
+        }
+        return LyricListenMatcher.lines(from: plain ?? synced ?? "")
+    }
+
+    /// Picks the best timing source (listening, then the lyrics' own timing, then phrases), fits and saves.
+    private func finishLyrics(synced: String?, plain: String?, credit: String, songID: String, heard: [LyricListenMatcher.HeardWord]?, listenProblem: String?) {
+        guard let current = imported.first(where: { $0.id == songID }) else { return }
+        let timedLines = synced.map { LRCParser.parse($0) } ?? []
+        let hasTiming = timedLines.filter { !$0.words.isEmpty }.count >= 2
+        var result: LyricAligner.Result?
+        var how: String?
+        if let heard {
+            let match = LyricListenMatcher.match(lyrics: lyricLines(synced: synced, plain: plain), heard: heard)
+            let enough = match.matchedWords >= 3 && match.matchedFraction >= (hasTiming ? 0.25 : 0.12)
+            AppLog.info(
+                "Listening heard \(heard.count) words; matched \(match.matchedWords)/\(match.totalWords) lyric words (\(enough ? "used" : "not enough"))",
+                category: "lyrics"
+            )
+            if enough {
+                result = LyricAligner.apply(lines: match.lines, to: current, autoOffset: false)
+                how = "Timed by listening to the song: recognised \(match.matchedWords) of \(match.totalWords) words."
+            } else {
+                how = "Listening to the song only recognised \(match.matchedWords) of \(match.totalWords) words, so "
+                    + (hasTiming ? "the lyrics' own timing was used." : "the lines were spread over the song's phrases.")
+            }
+        } else if let listenProblem {
+            how = "Couldn't listen to the song (\(listenProblem)), so " + (hasTiming ? "the lyrics' own timing was used." : "the lines were spread over the song's phrases.")
+        }
+        if result == nil {
+            if hasTiming {
+                result = LyricAligner.apply(lines: timedLines, to: current)
+            } else {
+                result = LyricAligner.applyPlain(plain ?? synced ?? "", to: current)
+            }
+        }
+        guard let result else { return }
         AppLog.info(
             "Lyrics fitted: \(result.wordsPlaced)/\(result.wordsTotal) words on \(result.notesWithWords)/\(current.notes.count) notes, "
-                + "offset \(String(format: "%+.2f", result.offset)) s, \(candidate.hasSyncedLyrics ? "timed" : "plain")",
+                + "offset \(String(format: "%+.2f", result.offset)) s",
             category: "lyrics"
         )
         guard result.wordsPlaced > 0 else {
-            message = Message(title: "The words didn't fit", text: "None of the lyrics lined up with this song's notes. Try another result.")
-            return false
+            message = Message(title: "The words didn't fit", text: "None of the lyrics lined up with this song's notes. Try other lyrics.")
+            return
         }
         var updated = result.song
-        updated.lyricsCredit = SongLimits.clip("LRCLIB: \(candidate.credit)")
+        updated.lyricsCredit = SongLimits.clip(credit)
         do {
             try store.save(updated)
             reload()
             var text = "\(result.wordsPlaced) words placed on \(result.notesWithWords) of \(current.notes.count) notes."
+            if let how { text += " " + how }
             if abs(result.offset) >= 0.05 {
                 text += " The lyrics were shifted \(String(format: "%+.1f", result.offset)) s to match your recording."
-            }
-            if !candidate.hasSyncedLyrics {
-                text += " These lyrics have no timing, so lines were spread over the song's phrases."
             }
             if result.wordsPlaced < result.wordsTotal {
                 text += " \(result.wordsTotal - result.wordsPlaced) words had no notes to go on."
             }
             message = Message(title: "Lyrics added", text: text)
-            return true
         } catch {
             message = Message(title: "Couldn't save the lyrics", text: error.localizedDescription)
-            return false
         }
+    }
+
+    // MARK: Voice and music
+
+    /// A long job on one song (separating stems, listening for lyrics), shown in its sheet.
+    struct SongJob: Equatable {
+        var songID: String
+        var title: String
+        var progress: Double
+    }
+
+    func stems(for song: Song) -> BackingStems? {
+        guard song.source != .builtIn, let urls = store.stemURLs(for: song),
+              FileManager.default.fileExists(atPath: urls.vocals.path),
+              FileManager.default.fileExists(atPath: urls.music.path) else { return nil }
+        return BackingStems(vocals: urls.vocals, music: urls.music)
+    }
+
+    func separateStems(for song: Song) {
+        guard songJobTask == nil, let backing = store.backingAudioURL(for: song) else { return }
+        songJob = SongJob(songID: song.id, title: "Separating the voice from the music…", progress: 0)
+        AppLog.info("Separating voice and music", category: "stems")
+        songJobTask = Task { [weak self] in
+            await self?.runSeparation(songID: song.id, backing: backing)
+            self?.endSongJob()
+        }
+    }
+
+    private func runSeparation(songID: String, backing: URL) async {
+        try? FileManager.default.createDirectory(at: Self.importTempDirectory, withIntermediateDirectories: true)
+        let vocals = Self.importTempDirectory.appendingPathComponent("\(UUID().uuidString)-vocals.m4a")
+        let music = Self.importTempDirectory.appendingPathComponent("\(UUID().uuidString)-music.m4a")
+        defer {
+            try? FileManager.default.removeItem(at: vocals)
+            try? FileManager.default.removeItem(at: music)
+        }
+        let started = Date()
+        do {
+            try await StemMaker.separate(backing, vocalsOut: vocals, musicOut: music) { [weak self] fraction in
+                Task { @MainActor in self?.songJob?.progress = fraction }
+            }
+            guard let latest = store.loadAll().songs.first(where: { $0.id == songID }) else { return }
+            _ = try store.attachStems(vocals: vocals, music: music, to: latest)
+            reload()
+            AppLog.info("Stems ready in \(String(format: "%.1f", Date().timeIntervalSince(started))) s", category: "stems")
+            message = Message(
+                title: "Voice and music separated",
+                text: "Use the Singer's voice and Music sliders (here or in the pause menu) to keep a little of the voice or the music in the background. It works best when the singer is in the middle of a stereo mix; some drums and echo can stay with the voice."
+            )
+        } catch is CancellationError {
+            AppLog.info("Separation cancelled", category: "stems")
+        } catch {
+            AppLog.warning("Separation failed: \(error.localizedDescription)", category: "stems")
+            message = Message(title: "Couldn't separate this song", text: error.localizedDescription)
+        }
+    }
+
+    func removeStems(from song: Song) {
+        do {
+            _ = try store.removeStems(from: imported.first { $0.id == song.id } ?? song)
+            AppLog.info("Stems removed", category: "stems")
+            reload()
+        } catch {
+            message = Message(title: "Couldn't remove the separation", text: error.localizedDescription)
+        }
+    }
+
+    func cancelSongJob() {
+        songJobTask?.cancel()
+    }
+
+    private func endSongJob() {
+        songJobTask = nil
+        songJob = nil
     }
 
     /// Erase everything: also removes folders that never loaded (corrupt or half-written imports).

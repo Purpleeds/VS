@@ -15,7 +15,8 @@ struct GameScreen: View {
             let plan = route.plan
             let song = base.transposed(by: plan.transpose)
             GameView(song: song, backingURL: library.backingAudioURL(for: base),
-                     videoURL: settings.settings.showVideo ? library.videoURL(for: base) : nil, options: GameOptions(
+                     videoURL: settings.settings.showVideo ? library.videoURL(for: base) : nil,
+                     stems: library.stems(for: base), options: GameOptions(
                 difficulty: plan.difficulty,
                 octaveAgnostic: settings.settings.octaveAgnostic,
                 clickTrack: settings.settings.clickTrack,
@@ -23,6 +24,8 @@ struct GameScreen: View {
                 guideTone: settings.settings.guideEnabled(for: plan.difficulty),
                 guideVolume: settings.settings.guideVolume,
                 backingVolume: settings.settings.backingVolume,
+                voiceStemVolume: settings.settings.voiceStemVolume,
+                musicStemVolume: settings.settings.musicStemVolume,
                 practice: plan.practice,
                 failEnabled: settings.settings.failEnabled,
                 transpose: plan.transpose

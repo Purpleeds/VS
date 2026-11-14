@@ -8,6 +8,7 @@ struct GameView: View {
     let song: Song
     let backingURL: URL?
     let videoURL: URL?
+    let stems: BackingStems?
     let options: GameOptions
 
     @StateObject private var session: GameSession
@@ -19,10 +20,11 @@ struct GameView: View {
     @State private var started = false
     @State private var showRouteWarning = true
 
-    init(song: Song, backingURL: URL?, videoURL: URL? = nil, options: GameOptions) {
+    init(song: Song, backingURL: URL?, videoURL: URL? = nil, stems: BackingStems? = nil, options: GameOptions) {
         self.song = song
         self.backingURL = backingURL
         self.videoURL = videoURL
+        self.stems = stems
         self.options = options
         _session = StateObject(wrappedValue: GameSession(song: song, options: options))
     }
@@ -83,14 +85,14 @@ struct GameView: View {
             }
             if audio.state == .running, !started {
                 started = true
-                session.begin(audio: audio, scores: scores, backingURL: backingURL)
+                session.begin(audio: audio, scores: scores, backingURL: backingURL, stems: stems)
             }
         }
         .onChange(of: audio.state) { _, state in
             switch state {
             case .running where !started:
                 started = true
-                session.begin(audio: audio, scores: scores, backingURL: backingURL)
+                session.begin(audio: audio, scores: scores, backingURL: backingURL, stems: stems)
             case .running:
                 break
             default:
@@ -375,7 +377,22 @@ struct PauseMenu: View {
                         }
                     ))
                     .disabled(!session.guideOn)
-                    if session.hasBacking {
+                    if session.hasStems {
+                        VolumeSlider(title: "Singer's voice", symbol: "music.mic", value: Binding(
+                            get: { settings.settings.voiceStemVolume },
+                            set: { value in
+                                settings.settings.voiceStemVolume = value
+                                session.setStemVolumes(voice: value, music: settings.settings.musicStemVolume)
+                            }
+                        ))
+                        VolumeSlider(title: "Music", symbol: "guitars", value: Binding(
+                            get: { settings.settings.musicStemVolume },
+                            set: { value in
+                                settings.settings.musicStemVolume = value
+                                session.setStemVolumes(voice: settings.settings.voiceStemVolume, music: value)
+                            }
+                        ))
+                    } else if session.hasBacking {
                         VolumeSlider(title: "Backing volume", symbol: "music.note", value: Binding(
                             get: { settings.settings.backingVolume },
                             set: { value in

@@ -177,6 +177,14 @@ Runs on every push and PR:
 - Lyrics logic is Core and tested: `LRCParser`, `LyricsSearch`, `LyricAligner`, `VoiceQuery`. Fetched lyrics are only
   put on the user's own imported songs, at their request, and stay on the phone; built-ins stay original.
 
+## Lyrics by listening and stems (step 9)
+
+- `SongListener` (app) runs on-device speech recognition over a song file (never server); Core `LyricListenMatcher`
+  turns heard words into word times. `StemMaker` (app) decodes, runs Core `StemSeparator` and encodes AAC stems;
+  the separator and FFT are pure Swift and tested. Don't log heard words or lyrics (counts only).
+- `BackingTrack` plays either the full mix or `BackingStems` (voice + music) on two players scheduled at the same host
+  time into one stem mixer; stems are invalidated whenever the backing audio changes (`SongLibraryStore`).
+
 ## Versioning
 
 - `CFBundleShortVersionString` = marketing version; `CFBundleVersion` = integer build number.

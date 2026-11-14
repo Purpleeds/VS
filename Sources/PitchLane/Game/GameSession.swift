@@ -12,6 +12,9 @@ struct GameOptions: Hashable {
     var guideTone: Bool
     var guideVolume: Double
     var backingVolume: Double
+    /// Separated songs: voice and music levels.
+    var voiceStemVolume: Double = 1
+    var musicStemVolume: Double = 1
     var practice: PracticeOptions = .normal
     /// Songs end when the energy bar empties (also needs `practice.noFail` off and no loop).
     var failEnabled: Bool = true
@@ -59,6 +62,8 @@ final class GameSession: ObservableObject {
     @Published private(set) var results: [NoteResult] = []
     @Published private(set) var guideOn: Bool
     @Published private(set) var hasBacking = false
+    /// The backing plays as separate voice and music stems (two sliders in the pause menu).
+    @Published private(set) var hasStems = false
     /// Shown once at game start when the song has backing audio that can't be played.
     @Published var backingProblem: String?
     @Published private(set) var health = 1.0
@@ -134,7 +139,7 @@ final class GameSession: ObservableObject {
 
     private var startRetryScheduled = false
 
-    func begin(audio: AudioInput, scores: ScoreStore, backingURL: URL?) {
+    func begin(audio: AudioInput, scores: ScoreStore, backingURL: URL?, stems: BackingStems? = nil) {
         self.audio = audio
         self.scores = scores
         previousBest = scores.best(songID: song.id, difficulty: options.difficulty)
@@ -150,7 +155,7 @@ final class GameSession: ObservableObject {
         }
         audio.installGuide(GuideToneRenderer(song: song, envelope: .soft))
         audio.setGuideVolume(guideOn ? Float(options.guideVolume) : 0)
-        loadBacking(backingURL)
+        loadBacking(backingURL, stems: stems)
         let latency = audio.latency
         AppLog.info(
             "Game start: \"\(song.title)\" [\(song.id)] \(options.difficulty.displayName), octave-agnostic \(options.octaveAgnostic), "
@@ -166,9 +171,31 @@ final class GameSession: ObservableObject {
         startWhenClockIsReady()
     }
 
-    private func loadBacking(_ url: URL?) {
+    private func loadBacking(_ url: URL?, stems: BackingStems?) {
         backingURL = url
-        guard let audio, let url else {
+        hasStems = false
+        guard let audio else {
+            hasBacking = false
+            return
+        }
+        if let stems {
+            do {
+                try audio.backing.load(stems: stems)
+                audio.backing.setVolume(Float(options.backingVolume))
+                audio.backing.setStemVolumes(voice: Float(options.voiceStemVolume), music: Float(options.musicStemVolume))
+                hasBacking = true
+                hasStems = true
+                AppLog.info(
+                    "Backing loaded as stems: voice \(Int(options.voiceStemVolume * 100))%, music \(Int(options.musicStemVolume * 100))%, "
+                        + "\(String(format: "%.1f", audio.backing.duration)) s",
+                    category: "game"
+                )
+                return
+            } catch {
+                AppLog.warning("Stems couldn't be opened, using the full backing: \(error.localizedDescription)", category: "game")
+            }
+        }
+        guard let url else {
             hasBacking = false
             return
         }
@@ -286,6 +313,12 @@ final class GameSession: ObservableObject {
     func setGuideVolume(_ volume: Double) {
         options.guideVolume = volume
         if guideOn { audio?.setGuideVolume(Float(volume)) }
+    }
+
+    func setStemVolumes(voice: Double, music: Double) {
+        options.voiceStemVolume = voice
+        options.musicStemVolume = music
+        audio?.backing.setStemVolumes(voice: Float(voice), music: Float(music))
     }
 
     func setBackingVolume(_ volume: Double) {

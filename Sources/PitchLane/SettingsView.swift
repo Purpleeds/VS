@@ -129,7 +129,7 @@ struct SettingsView: View {
                       systemImage: "mic.slash")
                 Label("Scores, settings, songs and logs stay on this phone. Logs leave it only if you copy or share them.",
                       systemImage: "lock")
-                Label("Voice search is recognised on the phone; your voice is never sent anywhere.",
+                Label("Voice search, timing lyrics by listening, and separating voice from music all run on the phone; no audio is ever sent anywhere.",
                       systemImage: "waveform")
                 Label("Find Lyrics Online sends only the song name you search for to lrclib.net. Nothing else goes online.",
                       systemImage: "network")

@@ -281,6 +281,10 @@ struct SongDetailSheet: View {
     @State private var photosItem: PhotosPickerItem?
     @State private var showLyrics = false
     @State private var pickedLyrics: LyricsCandidate?
+    @State private var showPaste = false
+    @State private var pastedLyrics: String?
+    @State private var listenForTiming = true
+    @State private var confirmRemoveStems = false
     @State private var confirmDelete = false
     @StateObject private var preview = TransposePreview()
 
@@ -423,13 +427,36 @@ struct SongDetailSheet: View {
                 }
             }
             if song.source != .builtIn {
+                lyricsSection(song)
+                if song.backingAudioFile != nil {
+                    voiceAndMusicSection(song)
+                }
                 Section {
                     Button("Attach Audio or Video from Files…", systemImage: "music.note") { showAudioImporter = true }
                     Button("Attach Video from Photos…", systemImage: "photo.on.rectangle") { showPhotos = true }
-                    Button("Find Lyrics Online…", systemImage: "text.quote") { showLyrics = true }
                     Button("Delete Song", systemImage: "trash", role: .destructive) { confirmDelete = true }
                 }
             }
+        }
+        .safeAreaInset(edge: .bottom) {
+            if let job = library.songJob, job.songID == song.id {
+                JobCard(title: job.title, progress: job.progress) { library.cancelSongJob() }
+                    .padding(.horizontal, 16)
+                    .padding(.bottom, 8)
+            }
+        }
+        .sheet(isPresented: $showPaste, onDismiss: {
+            if let text = pastedLyrics {
+                pastedLyrics = nil
+                library.applyPastedLyrics(text, to: song, listen: listenForTiming && song.backingAudioFile != nil)
+            }
+        }) {
+            PasteLyricsSheet { pastedLyrics = $0 }
+        }
+        .confirmationDialog("Remove the voice/music separation?", isPresented: $confirmRemoveStems, titleVisibility: .visible) {
+            Button("Remove", role: .destructive) { library.removeStems(from: song) }
+        } message: {
+            Text("The song goes back to its original backing audio. You can separate it again any time.")
         }
         .photosPicker(isPresented: $showPhotos, selection: $photosItem, matching: .videos, preferredItemEncoding: .current)
         .onChange(of: photosItem) { _, item in
@@ -440,7 +467,7 @@ struct SongDetailSheet: View {
         .sheet(isPresented: $showLyrics, onDismiss: {
             if let candidate = pickedLyrics {
                 pickedLyrics = nil
-                library.applyLyrics(candidate, to: song)
+                library.applyLyrics(candidate, to: song, listen: listenForTiming && song.backingAudioFile != nil)
             }
         }) {
             LyricsSearchSheet(song: song, backingURL: library.backingAudioURL(for: song)) { pickedLyrics = $0 }
@@ -455,6 +482,65 @@ struct SongDetailSheet: View {
                 if library.delete(song) { scores.forget(songID: song.id) }
                 dismiss()
             }
+        }
+    }
+
+    @ViewBuilder
+    private func lyricsSection(_ song: Song) -> some View {
+        let busy = library.songJob != nil
+        Section {
+            Button("Find Lyrics Online…", systemImage: "text.quote") { showLyrics = true }
+                .disabled(busy)
+            Button("Type or Paste Lyrics…", systemImage: "doc.on.clipboard") { showPaste = true }
+                .disabled(busy)
+            if song.backingAudioFile != nil {
+                Toggle("Time the words by listening to the song", isOn: $listenForTiming)
+            }
+        } header: {
+            Text("Lyrics")
+        } footer: {
+            Text(song.backingAudioFile == nil
+                 ? "Lines are matched to the notes by their timing, or spread over the song's phrases."
+                 : "Listening uses on-device speech recognition on the song\(song.hasStems ? "'s separated voice" : "") to find when each word is sung. Nothing is sent anywhere. Singing is harder to recognise than speech, so it falls back to the lyrics' own timing when too few words are heard.")
+        }
+    }
+
+    @ViewBuilder
+    private func voiceAndMusicSection(_ song: Song) -> some View {
+        Section {
+            if song.hasStems {
+                VolumeSlider(title: "Singer's voice", symbol: "music.mic", value: $settings.settings.voiceStemVolume)
+                VolumeSlider(title: "Music", symbol: "guitars", value: $settings.settings.musicStemVolume)
+                HStack {
+                    Button("Just the music") {
+                        settings.settings.voiceStemVolume = 0.1
+                        settings.settings.musicStemVolume = 1
+                    }
+                    Spacer()
+                    Button("Original") {
+                        settings.settings.voiceStemVolume = 1
+                        settings.settings.musicStemVolume = 1
+                    }
+                    Spacer()
+                    Button("Mostly voice") {
+                        settings.settings.voiceStemVolume = 1
+                        settings.settings.musicStemVolume = 0.2
+                    }
+                }
+                .buttonStyle(.bordered)
+                .controlSize(.small)
+                Button("Remove Separation", systemImage: "arrow.uturn.backward", role: .destructive) { confirmRemoveStems = true }
+                    .disabled(library.songJob != nil)
+            } else {
+                Button("Separate Voice and Music", systemImage: "slider.horizontal.2.square") { library.separateStems(for: song) }
+                    .disabled(library.songJob != nil)
+            }
+        } header: {
+            Text("Voice and music")
+        } footer: {
+            Text(song.hasStems
+                 ? "These levels apply to every separated song, and you can change them in the pause menu while you sing."
+                 : "Splits the backing into the singer's voice and the music, on this phone, so you can keep a little of either in the background. Works best on stereo recordings with the singer in the middle; it takes about a tenth of the song's length.")
         }
     }
 
@@ -589,6 +675,73 @@ extension Song {
         case .ultraStar: return "UltraStar"
         case .midi: return "MIDI"
         case .video: return "From video"
+        }
+    }
+}
+/// Progress of a long job on one song, with Cancel.
+struct JobCard: View {
+    let title: String
+    let progress: Double
+    let onCancel: () -> Void
+
+    var body: some View {
+        HStack(spacing: 14) {
+            Image(systemName: "waveform")
+                .font(.title2)
+                .foregroundStyle(Theme.accent)
+                .symbolEffect(.variableColor.iterative)
+            VStack(alignment: .leading, spacing: 6) {
+                Text(title)
+                    .font(.subheadline.weight(.semibold))
+                    .foregroundStyle(Theme.textPrimary)
+                    .lineLimit(2)
+                ProgressView(value: progress)
+                    .tint(Theme.accent)
+                Text("\(Int(progress * 100))% · keep PitchLane open")
+                    .font(.caption)
+                    .foregroundStyle(Theme.textSecondary)
+            }
+            Button("Cancel", role: .cancel, action: onCancel)
+                .buttonStyle(.bordered)
+        }
+        .padding(14)
+        .background(.ultraThinMaterial, in: RoundedRectangle(cornerRadius: 18, style: .continuous))
+        .accessibilityElement(children: .combine)
+    }
+}
+
+/// Type or paste lyrics (plain lines, or LRC with [mm:ss] times).
+struct PasteLyricsSheet: View {
+    let onAdd: (String) -> Void
+
+    @Environment(\.dismiss) private var dismiss
+    @State private var text = ""
+
+    var body: some View {
+        NavigationStack {
+            Form {
+                Section {
+                    TextEditor(text: $text)
+                        .frame(minHeight: 240)
+                        .font(.body)
+                } footer: {
+                    Text("One line per sung line. Lines with [mm:ss] times keep their timing. The words stay on this phone.")
+                }
+            }
+            .navigationTitle("Lyrics")
+            .navigationBarTitleDisplayMode(.inline)
+            .toolbar {
+                ToolbarItem(placement: .cancellationAction) {
+                    Button("Cancel") { dismiss() }
+                }
+                ToolbarItem(placement: .confirmationAction) {
+                    Button("Add") {
+                        onAdd(text)
+                        dismiss()
+                    }
+                    .disabled(text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
+                }
+            }
         }
     }
 }

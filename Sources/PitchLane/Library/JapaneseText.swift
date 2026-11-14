@@ -17,13 +17,12 @@ struct LyricDisplay: Sendable {
 /// Japanese text with the system tokenizer (CFStringTokenizer, Japanese locale), which knows kanji readings.
 /// Everything runs on the phone.
 enum JapaneseText {
-    private static let locale = Locale(identifier: "ja_JP") as CFLocale
-
     /// Words of `text`, with a hiragana reading for those written with kanji.
     static func tokens(_ text: String) -> [JapaneseToken] {
         let string = text as NSString
         let length = string.length
         guard length > 0 else { return [] }
+        let locale = Locale(identifier: "ja_JP") as CFLocale
         let tokenizer = CFStringTokenizerCreate(
             kCFAllocatorDefault, text as CFString, CFRange(location: 0, length: length), kCFStringTokenizerUnitWord, locale
         )

@@ -2,6 +2,7 @@
 import Foundation
 import QuartzCore
 import SwiftUI
+import UIKit
 import PitchLaneCore
 
 struct GameOptions: Hashable {
@@ -20,6 +21,8 @@ struct GameOptions: Hashable {
     var failEnabled: Bool = true
     /// Semitones the song was shifted by (for the history).
     var transpose: Int = 0
+    /// Vibrate on perfect notes, combo milestones and a new best.
+    var haptics: Bool = true
 }
 
 /// Runs one play-through: song clock on the audio output timeline, scoring, guide tone, backing track,
@@ -143,6 +146,8 @@ final class GameSession: ObservableObject {
     // MARK: Lifecycle
 
     private var startRetryScheduled = false
+    private let lightTap = UIImpactFeedbackGenerator(style: .light)
+    private let heavyTap = UIImpactFeedbackGenerator(style: .heavy)
 
     func begin(audio: AudioInput, scores: ScoreStore, backingURL: URL?, stems: BackingStems? = nil) {
         self.audio = audio
@@ -422,9 +427,13 @@ final class GameSession: ObservableObject {
             healthMeter.apply(note.rating)
             burst(for: full, rating: note.rating, at: note.endTime)
         }
+        if options.haptics {
+            if finished.contains(where: { $0.rating == .perfect }) { lightTap.impactOccurred(intensity: 0.6) }
+        }
         if let time = finished.last?.endTime {
             if let milestone = ComboMilestone.crossed(from: oldCombo, to: keeper.combo) {
                 comboFlash = (milestone, time)
+                if options.haptics { heavyTap.impactOccurred() }
             }
             if keeper.multiplier > oldMultiplier {
                 multiplierFlash = (keeper.multiplier, time)
@@ -590,6 +599,9 @@ final class GameSession: ObservableObject {
         summary.failed = didFail
         failed = didFail
         isNewBest = scores?.record(summary, practice: options.practice, transpose: options.transpose) ?? false
+        if options.haptics, !didFail {
+            UINotificationFeedbackGenerator().notificationOccurred(isNewBest ? .success : .warning)
+        }
         result = summary
         phase = .finished
         audio?.cancelClicks()

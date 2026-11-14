@@ -167,9 +167,11 @@ enum SongListener {
     /// 3. recognise it with the long-form on-device engine (`SpeechTranscriber`), which keeps the song's own timeline;
     /// 4. if that isn't available or hears almost nothing, recognise each sung phrase on its own with the classic
     ///    on-device recogniser and stitch the words back onto the timeline by phrase start.
+    /// `locale` nil = work out the language from the singing first (`detectLocale`). Returns the words and the
+    /// language actually used ("en-US", "ja-JP", ...).
     static func heardWords(
-        in url: URL, locale: Locale = .current, hints: [String], progress: @escaping @Sendable (Double) -> Void
-    ) async throws -> [LyricListenMatcher.HeardWord] {
+        in url: URL, locale requested: Locale?, hints: [String], progress: @escaping @Sendable (Double) -> Void
+    ) async throws -> (words: [LyricListenMatcher.HeardWord], language: String) {
         guard await VoiceSearch.authorization() == .authorized else { throw Failure.permission }
         let samples = try await decodeMono(url)
         guard !samples.isEmpty else { throw Failure.noAudio }
@@ -177,8 +179,66 @@ enum SongListener {
         let prepared = VocalPrep.prepare(samples, sampleRate: rate)
         let sung = prepared.segments.reduce(0) { $0 + $1.duration }
         AppLog.info("Voice prepared: \(prepared.segments.count) sung phrases, \(Int(sung)) s of \(Int(Double(samples.count) / rate)) s", category: "lyrics")
-        guard !prepared.segments.isEmpty else { return [] }
+        let fallbackLocale = requested ?? Locale.current
+        guard !prepared.segments.isEmpty else { return ([], identifier(fallbackLocale)) }
+        var locale = fallbackLocale
+        if requested == nil {
+            if let detected = await detectLocale(prepared, progress: { progress(0.2 * $0) }) {
+                locale = detected
+            }
+            AppLog.info("Language detected from the singing: \(identifier(locale))", category: "lyrics")
+        }
+        let words = try await heardWords(prepared: prepared, locale: locale, hints: hints) { progress(0.2 + 0.8 * $0) }
+        return (words, identifier(locale))
+    }
 
+    static func identifier(_ locale: Locale) -> String {
+        locale.identifier.replacingOccurrences(of: "_", with: "-")
+    }
+
+    /// Languages tried when detecting: the phone's own, then the most common song languages.
+    static let detectionCandidates = ["en-US", "ja-JP", "zh-CN", "ko-KR", "es-ES"]
+
+    /// Tries each candidate recogniser on the longest sung phrases (about 15 s) and keeps the language it is most
+    /// confident in, as long as it actually heard words. Nil if nothing was convincing.
+    static func detectLocale(_ prepared: VocalPrep.Prepared, progress: @escaping @Sendable (Double) -> Void) async -> Locale? {
+        var seen = Set<String>()
+        let candidates = ([identifier(Locale.current)] + detectionCandidates).filter { id in
+            seen.insert(String(id.prefix(2)).lowercased()).inserted
+        }
+        var sample: [VocalPrep.Segment] = []
+        var total = 0.0
+        for segment in prepared.segments.sorted(by: { $0.duration > $1.duration }) where total < 15 && sample.count < 4 {
+            sample.append(segment)
+            total += min(segment.duration, 15)
+        }
+        var best: (locale: Locale, score: Double)?
+        for (index, id) in candidates.enumerated() {
+            if Task.isCancelled { return nil }
+            let locale = Locale(identifier: id)
+            guard let recognizer = SFSpeechRecognizer(locale: locale), recognizer.isAvailable, recognizer.supportsOnDeviceRecognition else { continue }
+            var count = 0
+            var confidence = 0.0
+            for segment in sample {
+                let lo = max(0, Int(segment.start * rate)), hi = min(prepared.samples.count, Int(min(segment.end, segment.start + 15) * rate))
+                guard hi > lo else { continue }
+                let heard = await recognize(Array(prepared.samples[lo..<hi]), recognizer: recognizer, hints: [])
+                count += heard.words.count
+                confidence += heard.confidence * Double(heard.words.count)
+            }
+            let mean = count > 0 ? confidence / Double(count) : 0
+            // Confident and actually hearing words (a recogniser in the wrong language hears little, with low confidence).
+            let score = mean * min(1, Double(count) / max(1, total * 0.6))
+            AppLog.debug("Language \(id): \(count) words, confidence \(String(format: "%.2f", mean)), score \(String(format: "%.2f", score))", category: "lyrics")
+            if score > (best?.score ?? 0.15) { best = (locale, score) }
+            progress(Double(index + 1) / Double(candidates.count))
+        }
+        return best?.locale
+    }
+
+    private static func heardWords(
+        prepared: VocalPrep.Prepared, locale: Locale, hints: [String], progress: @escaping @Sendable (Double) -> Void
+    ) async throws -> [LyricListenMatcher.HeardWord] {
         var words: [HeardWord] = []
         do {
             words = try await longForm(prepared.samples, locale: locale) { progress(0.6 * $0) }
@@ -198,7 +258,7 @@ enum SongListener {
                 try Task.checkCancellation()
                 let lo = max(0, Int(segment.start * rate)), hi = min(prepared.samples.count, Int(segment.end * rate))
                 guard hi > lo else { continue }
-                let heard = await recognize(Array(prepared.samples[lo..<hi]), recognizer: recognizer, hints: hints)
+                let heard = await recognize(Array(prepared.samples[lo..<hi]), recognizer: recognizer, hints: hints).words
                 stitched += heard.map { HeardWord(text: $0.text, time: $0.time + segment.start, duration: $0.duration) }
                 progress(0.6 + 0.4 * Double(index + 1) / Double(prepared.segments.count))
             }
@@ -274,8 +334,9 @@ enum SongListener {
         }
     }
 
-    private static func recognize(_ samples: [Float], recognizer: SFSpeechRecognizer, hints: [String]) async -> [HeardWord] {
-        guard let format = AVAudioFormat(commonFormat: .pcmFormatFloat32, sampleRate: rate, channels: 1, interleaved: false) else { return [] }
+    /// One piece of audio through the classic on-device recogniser: the words and their mean confidence (0...1).
+    private static func recognize(_ samples: [Float], recognizer: SFSpeechRecognizer, hints: [String]) async -> (words: [HeardWord], confidence: Double) {
+        guard let format = AVAudioFormat(commonFormat: .pcmFormatFloat32, sampleRate: rate, channels: 1, interleaved: false) else { return ([], 0) }
         let request = SFSpeechAudioBufferRecognitionRequest()
         request.requiresOnDeviceRecognition = true
         request.shouldReportPartialResults = false
@@ -284,13 +345,13 @@ enum SongListener {
         request.contextualStrings = Array(hints.prefix(100))
         let once = Once()
         let taskBox = UncheckedBox<SFSpeechRecognitionTask>()
-        return await withCheckedContinuation { (continuation: CheckedContinuation<[HeardWord], Never>) in
+        return await withCheckedContinuation { (continuation: CheckedContinuation<(words: [HeardWord], confidence: Double), Never>) in
             taskBox.value = recognizer.recognitionTask(with: request) { @Sendable result, error in
                 guard (result?.isFinal ?? false) || error != nil else { return }
-                let words = result?.bestTranscription.segments.map {
-                    HeardWord(text: $0.substring, time: $0.timestamp, duration: $0.duration)
-                } ?? []
-                once.run { continuation.resume(returning: words) }
+                let segments = result?.bestTranscription.segments ?? []
+                let words = segments.map { HeardWord(text: $0.substring, time: $0.timestamp, duration: $0.duration) }
+                let confidence = segments.isEmpty ? 0 : segments.reduce(0.0) { $0 + Double($1.confidence) } / Double(segments.count)
+                once.run { continuation.resume(returning: (words, confidence)) }
             }
             var index = 0
             let piece = Int(rate)
@@ -306,7 +367,7 @@ enum SongListener {
             request.endAudio()
             // Never wait forever on one piece.
             DispatchQueue.global().asyncAfter(deadline: .now() + 90) {
-                once.run { continuation.resume(returning: []) }
+                once.run { continuation.resume(returning: ([], 0)) }
                 taskBox.value?.cancel()
             }
         }

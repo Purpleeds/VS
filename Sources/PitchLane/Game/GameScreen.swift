@@ -29,7 +29,8 @@ struct GameScreen: View {
                 musicStemVolume: settings.settings.musicStemVolume,
                 practice: plan.practice,
                 failEnabled: settings.settings.failEnabled,
-                transpose: plan.transpose
+                transpose: plan.transpose,
+                haptics: settings.settings.haptics
             ))
         } else {
             VStack(spacing: 12) {

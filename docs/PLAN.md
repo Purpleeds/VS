@@ -360,3 +360,14 @@ fix a line, Save (lane updates); Listen Again in another language; Settings togg
   silence between phrases) → iOS 26 long-form `SpeechTranscriber` (word times on the song's timeline; its language
   model is installed by iOS) → fallback: the classic on-device recogniser phrase by phrase, stitched back by each
   phrase's start time.
+
+## 15. Upgrade pass (done)
+
+- **Language detection:** "Automatic" now tries the phone's language, English, Japanese, Chinese, Korean and Spanish
+  recognisers on the longest sung phrases and keeps the most confident one that actually hears words; the result is
+  saved with the heard words. Settings > "Language of new songs" (detect, or a fixed language).
+- **Look:** game backdrop and chunky buttons on Tuner, Range test, Hold drill, Calibration, lyrics and voice sheets;
+  Practice is a tile grid (Range test, Hold drill, Tuner, Calibrate); Stats starts with the player card and shows grade
+  badges; the song sheet has a header with best grade, length, range and video/stems/lyrics icons.
+- **Haptics** (Settings > "Vibrate on hits and combos"): light tap on perfect notes, heavy on combo milestones,
+  success/warning at the end of a run.

@@ -81,6 +81,13 @@ final class SongTranscriptTests: XCTestCase {
     }
 
     func testAutoLyricsSettingDefaultsOn() throws {
-        XCTAssertTrue(try JSONDecoder().decode(AppSettings.self, from: Data("{}".utf8)).autoLyrics)
+        let defaults = try JSONDecoder().decode(AppSettings.self, from: Data("{}".utf8))
+        XCTAssertTrue(defaults.autoLyrics)
+        XCTAssertNil(defaults.uploadLanguage)
+        XCTAssertTrue(defaults.haptics)
+        let set = try JSONDecoder().decode(AppSettings.self, from: Data(#"{"uploadLanguage":"ja-JP","haptics":false}"#.utf8))
+        XCTAssertEqual(set.uploadLanguage, "ja-JP")
+        XCTAssertFalse(set.haptics)
+        XCTAssertNil(try JSONDecoder().decode(AppSettings.self, from: Data(#"{"uploadLanguage":""}"#.utf8)).uploadLanguage)
     }
 }

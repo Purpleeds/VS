@@ -67,6 +67,12 @@ struct SettingsView: View {
                 Toggle("Click track", isOn: $model.settings.clickTrack)
                 Toggle("Song videos behind the lane", isOn: $model.settings.showVideo)
                 Toggle("Write lyrics for new songs by listening", isOn: $model.settings.autoLyrics)
+                Picker("Language of new songs", selection: $model.settings.uploadLanguage) {
+                    ForEach(LibraryModel.listeningLanguages, id: \.name) { option in
+                        Text(option.id == nil ? "Detect from the singing" : option.name).tag(option.id)
+                    }
+                }
+                Toggle("Vibrate on hits and combos", isOn: $model.settings.haptics)
                 Picker("Japanese, Korean & Chinese lyrics", selection: $model.settings.romanizedLyrics) {
                     ForEach(RomanizedLyricsMode.allCases) { mode in
                         Text(mode.displayName).tag(mode)

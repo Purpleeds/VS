@@ -379,15 +379,40 @@ struct SongDetailSheet: View {
         let accidentals = settings.settings.accidentals
         return Form {
             Section {
-                VStack(alignment: .leading, spacing: 4) {
-                    Text(song.title).font(.title3.weight(.semibold))
-                    if !song.artist.isEmpty {
-                        Text(song.artist).foregroundStyle(Theme.textSecondary)
+                HStack(alignment: .top, spacing: 14) {
+                    if let grade = sheetBestGrade(song) {
+                        GradeBadge(grade: grade, size: 52)
+                    } else {
+                        ZStack {
+                            RoundedRectangle(cornerRadius: 14, style: .continuous).fill(Theme.titleGradient).opacity(0.25)
+                            Image(systemName: "music.mic").font(.title2.weight(.bold)).foregroundStyle(Theme.accent)
+                        }
+                        .frame(width: 52, height: 52)
+                        .accessibilityHidden(true)
                     }
-                    if case .builtIn(let kind) = selection {
-                        Text(kind.subtitle).font(.caption).foregroundStyle(Theme.textSecondary)
+                    VStack(alignment: .leading, spacing: 4) {
+                        Text(song.title)
+                            .font(.system(.title3, design: .rounded).weight(.heavy))
+                            .foregroundStyle(Theme.textPrimary)
+                        if !song.artist.isEmpty {
+                            Text(song.artist).foregroundStyle(Theme.textSecondary)
+                        }
+                        if case .builtIn(let kind) = selection {
+                            Text(kind.subtitle).font(.caption).foregroundStyle(Theme.textSecondary)
+                        }
+                        HStack(spacing: 10) {
+                            Label(summary.durationText, systemImage: "clock")
+                            Label(summary.rangeText(accidentals: accidentals), systemImage: "arrow.up.and.down")
+                            if song.videoFile != nil { Image(systemName: "film").accessibilityLabel("Has video") }
+                            if song.hasStems { Image(systemName: "slider.horizontal.2.square").accessibilityLabel("Voice and music separated") }
+                            if song.notes.contains(where: { !$0.displayLyric.isEmpty }) { Image(systemName: "text.quote").accessibilityLabel("Has lyrics") }
+                        }
+                        .font(.caption.weight(.semibold))
+                        .foregroundStyle(Theme.accent)
+                        .labelStyle(.titleAndIcon)
                     }
                 }
+                .padding(.vertical, 4)
             }
             Section {
                 Picker("Difficulty", selection: $difficulty) {
@@ -530,6 +555,18 @@ struct SongDetailSheet: View {
         }
     }
 
+    /// Best grade of this song over every difficulty (built-ins have one id per difficulty).
+    private func sheetBestGrade(_ song: Song) -> Grade? {
+        let ids: [String]
+        switch selection {
+        case .builtIn(let kind): ids = Difficulty.allCases.map { BuiltInSongs.song(kind, $0).id }
+        case .imported(let id): ids = [id]
+        }
+        let order: [Grade] = [.s, .a, .b, .c, .d, .f]
+        return ids.flatMap { id in Difficulty.allCases.compactMap { scores.best(songID: id, difficulty: $0)?.grade } }
+            .min { (order.firstIndex(of: $0) ?? 9) < (order.firstIndex(of: $1) ?? 9) }
+    }
+
     /// The first lyric line as the lane will show it romanized.
     private func romajiPreview(_ song: Song) -> String? {
         let display = LyricRomanizer.display(for: song, mode: .romanized)
@@ -561,7 +598,7 @@ struct SongDetailSheet: View {
             }
             Picker("Language", selection: $listeningLanguage) {
                 ForEach(LibraryModel.listeningLanguages, id: \.name) { option in
-                    Text(option.id == nil ? "Automatic (\(Self.languageName(library.listeningLanguage(for: song, chosen: nil))))" : option.name)
+                    Text(option.id == nil ? "Automatic (\(library.listeningLanguage(for: song, chosen: nil).map(Self.languageName) ?? "detect"))" : option.name)
                         .tag(option.id)
                 }
             }

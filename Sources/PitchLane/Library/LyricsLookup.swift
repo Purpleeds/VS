@@ -93,7 +93,7 @@ struct LyricsSearchSheet: View {
                 }
             }
             .scrollContentBackground(.hidden)
-            .background(Theme.background.ignoresSafeArea())
+            .background(GameBackdrop(intensity: 0.5))
             .navigationTitle("Find Lyrics")
             .navigationBarTitleDisplayMode(.inline)
             .toolbar {

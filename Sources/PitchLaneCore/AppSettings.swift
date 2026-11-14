@@ -39,6 +39,10 @@ public struct AppSettings: Codable, Equatable, Sendable {
     public var romanizedLyrics: RomanizedLyricsMode
     /// New songs made from a video or audio file also get their words by listening.
     public var autoLyrics: Bool
+    /// Language to listen in for new uploads ("ja-JP", ...); nil = detect it from the singing.
+    public var uploadLanguage: String?
+    /// Vibrate on perfect notes, combo milestones and new bests.
+    public var haptics: Bool
     /// Guide tone on for Easy/Normal (default on) and Hard (default off).
     public var guideOnEasyNormal: Bool
     public var guideOnHard: Bool
@@ -64,7 +68,9 @@ public struct AppSettings: Codable, Equatable, Sendable {
         voiceStemVolume: Double = 0.3,
         musicStemVolume: Double = 1,
         romanizedLyrics: RomanizedLyricsMode = .romanized,
-        autoLyrics: Bool = true
+        autoLyrics: Bool = true,
+        uploadLanguage: String? = nil,
+        haptics: Bool = true
     ) {
         self.debugOverlay = debugOverlay
         self.accidentals = accidentals
@@ -87,6 +93,8 @@ public struct AppSettings: Codable, Equatable, Sendable {
         self.musicStemVolume = musicStemVolume
         self.romanizedLyrics = romanizedLyrics
         self.autoLyrics = autoLyrics
+        self.uploadLanguage = uploadLanguage
+        self.haptics = haptics
     }
 
     public static let noiseGateRange: ClosedRange<Double> = -65 ... -30
@@ -132,6 +140,8 @@ public struct AppSettings: Codable, Equatable, Sendable {
         case musicStemVolume
         case romanizedLyrics = "japaneseLyrics"
         case autoLyrics
+        case uploadLanguage
+        case haptics
     }
 
     public init(from decoder: Decoder) throws {
@@ -158,6 +168,8 @@ public struct AppSettings: Codable, Equatable, Sendable {
         self.musicStemVolume = min(1, max(0, container.lenient(Double.self, forKey: .musicStemVolume) ?? 1))
         self.romanizedLyrics = container.lenient(RomanizedLyricsMode.self, forKey: .romanizedLyrics) ?? .romanized
         self.autoLyrics = container.lenient(Bool.self, forKey: .autoLyrics) ?? true
+        self.uploadLanguage = container.lenient(String.self, forKey: .uploadLanguage).flatMap { $0.isEmpty ? nil : $0 }
+        self.haptics = container.lenient(Bool.self, forKey: .haptics) ?? true
     }
 }
 

@@ -70,7 +70,7 @@ struct RangeTestView: View {
 
     var body: some View {
         ZStack {
-            Theme.background.ignoresSafeArea()
+            GameBackdrop(intensity: 0.55)
             switch audio.state {
             case .permissionDenied:
                 MicrophonePermissionView()
@@ -133,15 +133,15 @@ struct RangeTestView: View {
                     Text("\(range.text(accidentals: accidentals)) · \(range.spanText)")
                         .font(.headline)
                         .foregroundStyle(Theme.textPrimary)
+                    Button {
+                        settings.settings.vocalRange = range
+                        AppLog.info("Vocal range saved: MIDI \(range.low)-\(range.high)", category: "range")
+                        dismiss()
+                    } label: {
+                        Label("SAVE RANGE", systemImage: "checkmark")
+                    }
+                    .buttonStyle(ChunkyButtonStyle(color: Theme.good))
                     HStack {
-                        Button {
-                            settings.settings.vocalRange = range
-                            AppLog.info("Vocal range saved: MIDI \(range.low)-\(range.high)", category: "range")
-                            dismiss()
-                        } label: {
-                            Label("Save range", systemImage: "checkmark")
-                        }
-                        .buttonStyle(.borderedProminent)
                         Button("Redo high note") { model.redoHigh() }
                             .buttonStyle(.bordered)
                         Button("Start over") { model.restart() }

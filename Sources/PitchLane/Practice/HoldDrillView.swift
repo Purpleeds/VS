@@ -104,7 +104,7 @@ struct HoldDrillView: View {
 
     var body: some View {
         ZStack {
-            Theme.background.ignoresSafeArea()
+            GameBackdrop(intensity: 0.55)
             switch audio.state {
             case .permissionDenied:
                 MicrophonePermissionView()
@@ -191,10 +191,9 @@ struct HoldDrillView: View {
                 tone.stop()
                 model.start(target: free ? nil : note, duration: duration, octaveAgnostic: settings.settings.octaveAgnostic)
             } label: {
-                Label("Start", systemImage: "play.fill").frame(maxWidth: .infinity)
+                Label("START", systemImage: "play.fill")
             }
-            .buttonStyle(.borderedProminent)
-            .controlSize(.large)
+            .buttonStyle(ChunkyButtonStyle(color: Theme.accent))
             .disabled(audio.state != .running)
         }
     }
@@ -264,11 +263,11 @@ struct HoldDrillView: View {
                 Button {
                     model.start(target: model.target, duration: model.duration, octaveAgnostic: settings.settings.octaveAgnostic)
                 } label: {
-                    Label("Again", systemImage: "arrow.counterclockwise")
+                    Label("AGAIN", systemImage: "arrow.counterclockwise")
                 }
-                .buttonStyle(.borderedProminent)
-                Button("Change note") { model.reset() }
-                    .buttonStyle(.bordered)
+                .buttonStyle(ChunkyButtonStyle(color: Theme.accent, height: 50))
+                Button { model.reset() } label: { Text("CHANGE NOTE") }
+                    .buttonStyle(ChunkyButtonStyle(color: Theme.surfaceHighlight, textColor: Theme.textPrimary, height: 50))
             }
         }
     }

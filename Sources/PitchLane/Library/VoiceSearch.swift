@@ -245,7 +245,7 @@ struct VoiceSearchSheet: View {
         }
         .padding(24)
         .frame(maxWidth: .infinity, maxHeight: .infinity)
-        .background(Theme.background.ignoresSafeArea())
+        .background(GameBackdrop(intensity: 0.5))
         .presentationDetents([.medium])
         .task { await voice.start(audio: audio, hints: hints) }
         .onChange(of: voice.state) { _, state in

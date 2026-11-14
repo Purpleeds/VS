@@ -113,6 +113,11 @@ struct StatsView: View {
     var body: some View {
         let trend = scores.history.trend()
         List {
+            Section {
+                PlayerCard(progress: PlayerProgress(history: scores.history))
+                    .listRowBackground(Color.clear)
+                    .listRowInsets(EdgeInsets(top: 4, leading: 0, bottom: 4, trailing: 0))
+            }
             Section("Accuracy trend") {
                 VStack(alignment: .leading, spacing: 10) {
                     TrendChart(points: trend).frame(height: 170)
@@ -141,6 +146,9 @@ struct StatsView: View {
                                     .foregroundStyle(Theme.textSecondary)
                             }
                             Spacer()
+                            if let grade = bestGrade(summary.songID) {
+                                GradeBadge(grade: grade, size: 30)
+                            }
                             VStack(alignment: .trailing, spacing: 2) {
                                 Text("\(summary.bestScore)").font(.subheadline.monospacedDigit()).foregroundStyle(Theme.textPrimary)
                                 Text("best · \(Int((summary.bestAccuracy * 100).rounded()))%").font(.caption).foregroundStyle(Theme.textSecondary)
@@ -154,6 +162,12 @@ struct StatsView: View {
         .background(GameBackdrop(intensity: 0.5))
         .navigationTitle("Stats")
         .navigationBarTitleDisplayMode(.inline)
+    }
+
+    private func bestGrade(_ songID: String) -> Grade? {
+        let order: [Grade] = [.s, .a, .b, .c, .d, .f]
+        return Difficulty.allCases.compactMap { scores.best(songID: songID, difficulty: $0)?.grade }
+            .min { (order.firstIndex(of: $0) ?? 9) < (order.firstIndex(of: $1) ?? 9) }
     }
 }
 

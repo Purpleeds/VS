@@ -9,7 +9,7 @@ struct TunerView: View {
 
     var body: some View {
         ZStack {
-            Theme.background.ignoresSafeArea()
+            GameBackdrop(intensity: 0.55)
             content
         }
         .navigationTitle("Tuner")

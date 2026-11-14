@@ -44,6 +44,8 @@ final class LibraryModel: ObservableObject {
     @Published private(set) var transcripts: [String: SongTranscript] = [:]
     /// Mirrors Settings > "Write lyrics for new songs by listening".
     var autoLyrics = true
+    /// Mirrors Settings > "Language of new songs" (nil = detect from the singing).
+    var uploadLanguage: String?
     private var transcriptionTask: Task<Void, Never>?
 
     let builtIns = BuiltInSongs.all
@@ -323,7 +325,7 @@ final class LibraryModel: ObservableObject {
             // 5. Words, recognised from the voice.
             if autoLyrics {
                 stage("Recognising the words")
-                text += "\n\n" + (await listenAndFit(songID: song.id, language: nil, progress: report))
+                text += "\n\n" + (await listenAndFit(songID: song.id, language: uploadLanguage, progress: report))
             } else {
                 text += "\n\nAdd the words in the song's details: Write Lyrics by Listening, Find Lyrics Online, or type them."
             }
@@ -558,6 +560,7 @@ final class LibraryModel: ObservableObject {
             hints = Array(Set(words.map { $0.lowercased().trimmingCharacters(in: .punctuationCharacters) }.filter { $0.count > 2 })).sorted()
         }
         let languageID = script.speechLocaleIdentifier ?? listeningLanguage(for: current, chosen: nil)
+            ?? SongListener.identifier(Locale.current)
         let locale = Locale(identifier: languageID)
         // Heard words are saved: reuse them instead of listening again (Listen Again in the sheet refreshes them).
         if let saved = transcripts[song.id], !saved.isEmpty, Self.sameLanguage(saved.language, languageID) {
@@ -574,7 +577,7 @@ final class LibraryModel: ObservableObject {
             do {
                 heard = try await SongListener.heardWords(in: audio, locale: locale, hints: hints) { [weak self] fraction in
                     Task { @MainActor in self?.songJob?.progress = fraction }
-                }
+                }.words
             } catch is CancellationError {
                 self?.endSongJob()
                 return
@@ -707,12 +710,11 @@ final class LibraryModel: ObservableObject {
     ]
 
     /// The language to listen in: the chosen one, else the saved transcript's, else the script of the song's words
-    /// or title, else the phone's language.
-    func listeningLanguage(for song: Song, chosen: String?) -> String {
+    /// or title. Nil = detect it from the singing.
+    func listeningLanguage(for song: Song, chosen: String?) -> String? {
         if let chosen { return chosen }
         if let saved = transcripts[song.id]?.language, !saved.isEmpty { return saved }
-        let script = LyricScript.detect(song.notes.map(\.lyric) + [song.title, song.artist])
-        return script.speechLocaleIdentifier ?? Locale.current.identifier.replacingOccurrences(of: "_", with: "-")
+        return LyricScript.detect(song.notes.map(\.lyric) + [song.title, song.artist]).speechLocaleIdentifier
     }
 
     /// Listens to the whole song, saves the heard words with their times and lengths, and puts them on the notes.
@@ -722,11 +724,11 @@ final class LibraryModel: ObservableObject {
         let stems = store.stemURLs(for: song)
         guard let audio = stems?.vocals ?? store.backingAudioURL(for: song) else { return "The song has no audio to listen to." }
         let languageID = listeningLanguage(for: song, chosen: language)
-        AppLog.info("Listening for words (\(languageID), \(stems != nil ? "voice stem" : "full mix"))", category: "lyrics")
+        AppLog.info("Listening for words (\(languageID ?? "detect"), \(stems != nil ? "voice stem" : "full mix"))", category: "lyrics")
         do {
             let hints = Array(Set(song.title.split(whereSeparator: \.isWhitespace).map(String.init).filter { $0.count > 2 })).sorted()
-            let heard = try await SongListener.heardWords(in: audio, locale: Locale(identifier: languageID), hints: hints, progress: progress)
-            let transcript = SongTranscript(language: languageID, source: stems != nil ? "voice" : "mix", words: heard)
+            let heard = try await SongListener.heardWords(in: audio, locale: languageID.map { Locale(identifier: $0) }, hints: hints, progress: progress)
+            let transcript = SongTranscript(language: heard.language, source: stems != nil ? "voice" : "mix", words: heard.words)
             try store.saveTranscript(transcript, for: song)
             transcripts[song.id] = transcript
             AppLog.info("Heard \(transcript.words.count) words (\(transcript.lines().count) lines)", category: "lyrics")

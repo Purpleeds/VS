@@ -6,47 +6,61 @@ struct PracticeHubView: View {
     @EnvironmentObject private var settings: SettingsModel
 
     var body: some View {
-        List {
-            Section {
-                NavigationLink(value: Route.rangeTest) {
-                    row(
-                        "Range test", symbol: "waveform.path.ecg",
-                        detail: settings.settings.vocalRange.map { "Saved: \($0.text(accidentals: settings.settings.accidentals))" } ?? "Find your lowest and highest notes"
-                    )
+        ZStack {
+            GameBackdrop(intensity: 0.6)
+            ScrollView {
+                VStack(alignment: .leading, spacing: 16) {
+                    Text("TRAIN YOUR VOICE")
+                        .font(.system(.caption, design: .rounded).weight(.heavy))
+                        .tracking(3)
+                        .foregroundStyle(Theme.textSecondary)
+                    LazyVGrid(columns: [GridItem(.flexible(), spacing: 14), GridItem(.flexible(), spacing: 14)], spacing: 14) {
+                        NavigationLink(value: Route.rangeTest) {
+                            GameTile(
+                                title: "Range test",
+                                detail: settings.settings.vocalRange.map { "Saved: \($0.text(accidentals: settings.settings.accidentals))" }
+                                    ?? "Find your lowest and highest notes",
+                                symbol: "waveform.path.ecg", color: Theme.accent
+                            )
+                        }
+                        .buttonStyle(PressableStyle())
+                        NavigationLink(value: Route.holdDrill) {
+                            GameTile(title: "Hold drill", detail: "One long note, scored on steadiness", symbol: "timer", color: Theme.gold)
+                        }
+                        .buttonStyle(PressableStyle())
+                        NavigationLink(value: Route.tuner) {
+                            GameTile(title: "Tuner", detail: "See every note you sing", symbol: "tuningfork", color: Theme.violet)
+                        }
+                        .buttonStyle(PressableStyle())
+                        NavigationLink(value: Route.latency) {
+                            GameTile(title: "Calibrate", detail: "Line your voice up with the music", symbol: "metronome", color: Theme.accentSecondary)
+                        }
+                        .buttonStyle(PressableStyle())
+                    }
+                    VStack(alignment: .leading, spacing: 8) {
+                        Label("Practise a song", systemImage: "music.note.list")
+                            .font(.system(.headline, design: .rounded).weight(.heavy))
+                            .foregroundStyle(Theme.textPrimary)
+                        Text("Open a song in the Library to slow it down, loop a phrase, sing it in another key, or turn off failing.")
+                            .font(.footnote)
+                            .foregroundStyle(Theme.textSecondary)
+                        if settings.settings.instrumentMode {
+                            Label("Instrument mode is on (about 40 Hz to 2 kHz).", systemImage: "music.quarternote.3")
+                                .font(.footnote)
+                                .foregroundStyle(Theme.accent)
+                        }
+                    }
+                    .padding(16)
+                    .frame(maxWidth: .infinity, alignment: .leading)
+                    .background(.ultraThinMaterial.opacity(0.85), in: RoundedRectangle(cornerRadius: 20, style: .continuous))
                 }
-                NavigationLink(value: Route.holdDrill) {
-                    row("Hold drill", symbol: "timer", detail: "One long note, scored on steadiness")
-                }
-            } header: {
-                Text("Train")
-            }
-            Section {
-                Text("To loop a phrase, slow a song down, or sing in a different key, open a song in the Library and use Practice and Key.")
-                    .font(.footnote)
-                    .foregroundStyle(Theme.textSecondary)
-                if settings.settings.instrumentMode {
-                    Label("Instrument mode is on (about 40 Hz to 2 kHz).", systemImage: "music.quarternote.3")
-                        .font(.footnote)
-                        .foregroundStyle(Theme.accent)
-                }
+                .frame(maxWidth: 440)
+                .frame(maxWidth: .infinity)
+                .padding(20)
             }
         }
-        .scrollContentBackground(.hidden)
-        .background(GameBackdrop(intensity: 0.5))
         .navigationTitle("Practice")
         .navigationBarTitleDisplayMode(.inline)
-    }
-
-    private func row(_ title: String, symbol: String, detail: String) -> some View {
-        HStack(spacing: 12) {
-            Image(systemName: symbol)
-                .frame(width: 28)
-                .foregroundStyle(Theme.accent)
-            VStack(alignment: .leading, spacing: 2) {
-                Text(title).font(.headline).foregroundStyle(Theme.textPrimary)
-                Text(detail).font(.caption).foregroundStyle(Theme.textSecondary)
-            }
-        }
     }
 }
 #endif

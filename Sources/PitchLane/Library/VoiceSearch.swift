@@ -173,7 +173,7 @@ final class VoiceSearch: ObservableObject {
         }
     }
 
-    private static func authorization() async -> SFSpeechRecognizerAuthorizationStatus {
+    static func authorization() async -> SFSpeechRecognizerAuthorizationStatus {
         let current = SFSpeechRecognizer.authorizationStatus()
         guard current == .notDetermined else { return current }
         return await withCheckedContinuation { continuation in

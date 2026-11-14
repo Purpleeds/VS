@@ -62,27 +62,30 @@ public final class StemSeparator {
     public init(sampleRate: Double, configuration: Configuration = Configuration()) {
         self.configuration = configuration
         self.sampleRate = max(1, sampleRate)
-        fft = FFT(size: max(256, configuration.frameSize))
-        n = fft.size
-        hop = n / 4
-        window = (0..<n).map { Float(sin(Double.pi * Double($0) / Double(n))) } // √(periodic Hann)
+        let transform = FFT(size: max(256, configuration.frameSize))
+        let size = transform.size
+        fft = transform
+        n = size
+        hop = size / 4
+        window = (0..<size).map { Float(sin(Double.pi * Double($0) / Double(size))) } // √(periodic Hann)
         let low = configuration.lowCut, high = configuration.highCut
-        band = (0...(n / 2)).map { k in
-            let f = Double(k) * max(1, sampleRate) / Double(n)
+        let binHz = max(1, sampleRate) / Double(size)
+        band = (0...(size / 2)).map { k in
+            let f = Double(k) * binHz
             if f < low * 0.7 || f > high * 1.5 { return 0 }
             if f < low { return Float((f - low * 0.7) / (low * 0.3)) }
             if f > high { return Float(1 - (f - high) / (high * 0.5)) }
             return 1
         }
-        smoothedMask = [Float](repeating: 0, count: n / 2 + 1)
-        re = [Float](repeating: 0, count: n)
-        im = [Float](repeating: 0, count: n)
+        smoothedMask = [Float](repeating: 0, count: size / 2 + 1)
+        re = [Float](repeating: 0, count: size)
+        im = [Float](repeating: 0, count: size)
         // Pad the front so the first real sample is covered by a full set of frames; drop that much output later.
-        pendingLeft = [Float](repeating: 0, count: n - hop)
-        pendingRight = [Float](repeating: 0, count: n - hop)
-        olaLeft = [Float](repeating: 0, count: n)
-        olaRight = [Float](repeating: 0, count: n)
-        toDrop = n - hop
+        pendingLeft = [Float](repeating: 0, count: size - size / 4)
+        pendingRight = [Float](repeating: 0, count: size - size / 4)
+        olaLeft = [Float](repeating: 0, count: size)
+        olaRight = [Float](repeating: 0, count: size)
+        toDrop = size - size / 4
     }
 
     /// Samples of delay inside the separator (output catches up in `finish()`).

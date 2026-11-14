@@ -49,6 +49,8 @@ extension Song {
         copy.tempo = []
         copy.backingAudioFile = nil
         copy.videoFile = nil
+        copy.vocalsStemFile = nil
+        copy.musicStemFile = nil
         return copy
     }
 

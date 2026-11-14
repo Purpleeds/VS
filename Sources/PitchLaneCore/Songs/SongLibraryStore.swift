@@ -105,9 +105,62 @@ public struct SongLibraryStore: Sendable {
         }
         var updated = song
         updated.backingAudioFile = name
+        // Stems were made from the old backing: they no longer match.
+        let staleStems = stemURLs(for: song)
+        updated.vocalsStemFile = nil
+        updated.musicStemFile = nil
         try save(updated)
         if let old = backingAudioURL(for: song), old.lastPathComponent != name, fileManager.fileExists(atPath: old.path) {
             try? fileManager.removeItem(at: old)
+        }
+        if let staleStems {
+            try? fileManager.removeItem(at: staleStems.vocals)
+            try? fileManager.removeItem(at: staleStems.music)
+        }
+        return updated
+    }
+
+    public static let vocalsStemName = "stem-vocals.m4a"
+    public static let musicStemName = "stem-music.m4a"
+
+    public func stemURLs(for song: Song) -> (vocals: URL, music: URL)? {
+        guard let vocals = song.vocalsStemFile, let music = song.musicStemFile else { return nil }
+        let folder = folder(for: song.id)
+        return (folder.appendingPathComponent(vocals), folder.appendingPathComponent(music))
+    }
+
+    /// Moves freshly separated stems into the song's folder and saves. The sources are consumed.
+    @discardableResult
+    public func attachStems(vocals: URL, music: URL, to song: Song) throws -> Song {
+        let fileManager = FileManager.default
+        let folder = folder(for: song.id)
+        try fileManager.createDirectory(at: folder, withIntermediateDirectories: true)
+        let vocalsTarget = folder.appendingPathComponent(Self.vocalsStemName)
+        let musicTarget = folder.appendingPathComponent(Self.musicStemName)
+        for (source, target) in [(vocals, vocalsTarget), (music, musicTarget)] {
+            if fileManager.fileExists(atPath: target.path) {
+                _ = try fileManager.replaceItemAt(target, withItemAt: source)
+            } else {
+                try fileManager.moveItem(at: source, to: target)
+            }
+        }
+        var updated = song
+        updated.vocalsStemFile = Self.vocalsStemName
+        updated.musicStemFile = Self.musicStemName
+        try save(updated)
+        return updated
+    }
+
+    @discardableResult
+    public func removeStems(from song: Song) throws -> Song {
+        let urls = stemURLs(for: song)
+        var updated = song
+        updated.vocalsStemFile = nil
+        updated.musicStemFile = nil
+        try save(updated)
+        if let urls {
+            try? FileManager.default.removeItem(at: urls.vocals)
+            try? FileManager.default.removeItem(at: urls.music)
         }
         return updated
     }

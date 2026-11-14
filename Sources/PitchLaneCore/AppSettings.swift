@@ -32,6 +32,9 @@ public struct AppSettings: Codable, Equatable, Sendable {
     public var failEnabled: Bool
     /// Songs with a video show it (dimmed) behind the lane.
     public var showVideo: Bool
+    /// Separated songs: how loud the singer's voice and the music play (0...1 each).
+    public var voiceStemVolume: Double
+    public var musicStemVolume: Double
     /// Guide tone on for Easy/Normal (default on) and Hard (default off).
     public var guideOnEasyNormal: Bool
     public var guideOnHard: Bool
@@ -53,7 +56,9 @@ public struct AppSettings: Codable, Equatable, Sendable {
         instrumentMode: Bool = false,
         showFPS: Bool = false,
         failEnabled: Bool = true,
-        showVideo: Bool = true
+        showVideo: Bool = true,
+        voiceStemVolume: Double = 0.3,
+        musicStemVolume: Double = 1
     ) {
         self.debugOverlay = debugOverlay
         self.accidentals = accidentals
@@ -72,6 +77,8 @@ public struct AppSettings: Codable, Equatable, Sendable {
         self.showFPS = showFPS
         self.failEnabled = failEnabled
         self.showVideo = showVideo
+        self.voiceStemVolume = voiceStemVolume
+        self.musicStemVolume = musicStemVolume
     }
 
     public static let noiseGateRange: ClosedRange<Double> = -65 ... -30
@@ -113,6 +120,8 @@ public struct AppSettings: Codable, Equatable, Sendable {
         case showFPS
         case failEnabled
         case showVideo
+        case voiceStemVolume
+        case musicStemVolume
     }
 
     public init(from decoder: Decoder) throws {
@@ -135,5 +144,7 @@ public struct AppSettings: Codable, Equatable, Sendable {
         self.showFPS = container.lenient(Bool.self, forKey: .showFPS) ?? false
         self.failEnabled = container.lenient(Bool.self, forKey: .failEnabled) ?? true
         self.showVideo = container.lenient(Bool.self, forKey: .showVideo) ?? true
+        self.voiceStemVolume = min(1, max(0, container.lenient(Double.self, forKey: .voiceStemVolume) ?? 0.3))
+        self.musicStemVolume = min(1, max(0, container.lenient(Double.self, forKey: .musicStemVolume) ?? 1))
     }
 }

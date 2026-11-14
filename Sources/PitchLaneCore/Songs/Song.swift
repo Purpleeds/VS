@@ -159,6 +159,11 @@ public struct Song: Codable, Sendable, Equatable, Identifiable {
     public var videoFile: String?
     /// Where the words came from when they were looked up online (e.g. "LRCLIB: Track · Artist").
     public var lyricsCredit: String?
+    /// Separated stems of the backing audio (`StemSeparator`), played together with separate volumes.
+    public var vocalsStemFile: String?
+    public var musicStemFile: String?
+
+    public var hasStems: Bool { vocalsStemFile != nil && musicStemFile != nil }
 
     public init(
         id: String,
@@ -172,7 +177,9 @@ public struct Song: Codable, Sendable, Equatable, Identifiable {
         backingAudioFile: String? = nil,
         offsetMs: Double = 0,
         videoFile: String? = nil,
-        lyricsCredit: String? = nil
+        lyricsCredit: String? = nil,
+        vocalsStemFile: String? = nil,
+        musicStemFile: String? = nil
     ) {
         self.schemaVersion = Song.currentSchemaVersion
         self.id = id
@@ -187,10 +194,12 @@ public struct Song: Codable, Sendable, Equatable, Identifiable {
         self.offsetMs = offsetMs
         self.videoFile = videoFile
         self.lyricsCredit = lyricsCredit
+        self.vocalsStemFile = vocalsStemFile
+        self.musicStemFile = musicStemFile
     }
 
     private enum CodingKeys: String, CodingKey {
-        case schemaVersion, id, title, artist, source, difficulty, notes, lineBreaks, tempo, backingAudioFile, offsetMs, videoFile, lyricsCredit
+        case schemaVersion, id, title, artist, source, difficulty, notes, lineBreaks, tempo, backingAudioFile, offsetMs, videoFile, lyricsCredit, vocalsStemFile, musicStemFile
     }
 
     public init(from decoder: Decoder) throws {
@@ -210,6 +219,8 @@ public struct Song: Codable, Sendable, Equatable, Identifiable {
         offsetMs = offset.isFinite ? max(-60_000, min(60_000, offset)) : 0
         videoFile = c.lenient(String.self, forKey: .videoFile)
         lyricsCredit = c.lenient(String.self, forKey: .lyricsCredit).map(SongLimits.clip)
+        vocalsStemFile = c.lenient(String.self, forKey: .vocalsStemFile)
+        musicStemFile = c.lenient(String.self, forKey: .musicStemFile)
         guard notes.count <= SongLimits.maximumNotes * 2 else {
             throw DecodingError.dataCorruptedError(forKey: .notes, in: c, debugDescription: "too many notes (\(notes.count))")
         }

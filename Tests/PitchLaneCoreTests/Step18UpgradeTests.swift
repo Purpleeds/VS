@@ -10,7 +10,7 @@ private var utc: Calendar {
 /// 14 November 2026, noon UTC.
 private let day0 = Date(timeIntervalSince1970: 1_794_657_600)
 
-private func run(
+private func makeRun(
     _ songID: String, day: Int = 0, grade: Grade = .c, accuracy: Double = 0.5, combo: Int = 5, difficulty: Difficulty = .normal,
     practice: Bool = false, failed: Bool = false, transpose: Int = 0, score: Int = 1_000, minutes: Double = 0
 ) -> GameRecord {
@@ -38,13 +38,13 @@ final class DailySongTests: XCTestCase {
     func testTheBonusGoesToTheFirstFinishOfEachDay() {
         let today = BuiltInSongs.id(DailySong.kind(for: day0, calendar: utc), .normal)
         let tomorrowsSong = BuiltInSongs.id(DailySong.kind(for: day0.addingTimeInterval(86_400), calendar: utc), .hard)
-        let failed = run(today, failed: true, minutes: 1)
-        let first = run(today, minutes: 2)
-        let again = run(today, minutes: 3)
-        let otherDay = run(today, day: 1) // yesterday's pick isn't today's
-        let tomorrow = run(tomorrowsSong, day: 1)
+        let failed = makeRun(today, failed: true, minutes: 1)
+        let first = makeRun(today, minutes: 2)
+        let again = makeRun(today, minutes: 3)
+        let otherDay = makeRun(today, day: 1) // yesterday's pick isn't today's
+        let tomorrow = makeRun(tomorrowsSong, day: 1)
         let bonus = DailySong.bonusRecords([failed, first, again, otherDay, tomorrow], calendar: utc)
-        XCTAssertEqual(bonus, [first.id, tomorrow.id])
+        XCTAssertEqual(bonus, Set([first.id, tomorrow.id]))
         XCTAssertFalse(DailySong.isDone(records: [failed], on: day0, calendar: utc))
         XCTAssertTrue(DailySong.isDone(records: [failed, first], on: day0, calendar: utc))
 
@@ -58,11 +58,11 @@ final class DailySongTests: XCTestCase {
 final class AchievementTests: XCTestCase {
     func testBadgesFromTheHistory() {
         XCTAssertTrue(Achievements.earned([], calendar: utc).isEmpty)
-        let failed = run("a", failed: true)
+        let failed = makeRun("a", failed: true)
         XCTAssertNil(Achievements.earned([failed], calendar: utc)[.firstSong])
-        let first = run("a", minutes: 1)
-        let practiceA = run("b", grade: .a, practice: true, minutes: 2)
-        let fullS = run("c", grade: .s, combo: 120, difficulty: .hard, transpose: -2, minutes: 3)
+        let first = makeRun("a", minutes: 1)
+        let practiceA = makeRun("b", grade: .a, practice: true, minutes: 2)
+        let fullS = makeRun("c", grade: .s, combo: 120, difficulty: .hard, transpose: -2, minutes: 3)
         let earned = Achievements.earned([failed, first, practiceA, fullS], calendar: utc)
         XCTAssertEqual(earned[.firstSong], first.id)
         XCTAssertEqual(earned[.practice], practiceA.id)
@@ -79,32 +79,32 @@ final class AchievementTests: XCTestCase {
     func testCountsSongsStreaksAndTheSongbook() {
         // Twinkle on two difficulties counts as one song.
         var records = [
-            run(BuiltInSongs.id(.twinkle, .easy)), run(BuiltInSongs.id(.twinkle, .hard), minutes: 1),
-            run("x", minutes: 2), run("y", minutes: 3), run("z", minutes: 4),
+            makeRun(BuiltInSongs.id(.twinkle, .easy)), makeRun(BuiltInSongs.id(.twinkle, .hard), minutes: 1),
+            makeRun("x", minutes: 2), makeRun("y", minutes: 3), makeRun("z", minutes: 4),
         ]
         XCTAssertNil(Achievements.earned(records, calendar: utc)[.fiveSongs])
-        records.append(run("w", minutes: 5))
+        records.append(makeRun("w", minutes: 5))
         XCTAssertEqual(Achievements.earned(records, calendar: utc)[.fiveSongs], records.last?.id)
 
         let samples = BuiltInKind.allCases.filter { !$0.isOriginal }.enumerated().map { index, kind in
-            run(BuiltInSongs.id(kind, .normal), minutes: Double(index))
+            makeRun(BuiltInSongs.id(kind, .normal), minutes: Double(index))
         }
         XCTAssertEqual(Achievements.earned(samples, calendar: utc)[.allSamples], samples.last?.id)
         XCTAssertNil(Achievements.earned(Array(samples.dropLast()), calendar: utc)[.allSamples])
 
-        let tenth = (0..<10).map { run("s\($0)", minutes: Double($0)) }
+        let tenth = (0..<10).map { makeRun("s\($0)", minutes: Double($0)) }
         XCTAssertEqual(Achievements.earned(tenth, calendar: utc)[.tenRuns], tenth.last?.id)
 
         // Days 0, 1, (gap), 3, 4, 5: the streak of three is earned on day 5.
-        let streak = [0, 1, 3, 4, 5].map { run("s", day: $0, failed: $0 == 4) }
+        let streak = [0, 1, 3, 4, 5].map { makeRun("s", day: $0, failed: $0 == 4) }
         let earned = Achievements.earned(streak, calendar: utc)
         XCTAssertEqual(earned[.streak3], streak.last?.id)
         XCTAssertNil(earned[.streak7])
     }
 
     func testOnlyTheBadgesOfTheNewRunAreNew() {
-        let before = [run("a")]
-        let daily = run(BuiltInSongs.id(DailySong.kind(for: day0, calendar: utc), .normal), grade: .a, combo: 30, minutes: 1)
+        let before = [makeRun("a")]
+        let daily = makeRun(BuiltInSongs.id(DailySong.kind(for: day0, calendar: utc), .normal), grade: .a, combo: 30, minutes: 1)
         let new = Achievements.newlyEarned(before: before, after: before + [daily], calendar: utc)
         XCTAssertEqual(new, [.gradeA, .combo25, .songOfTheDay])
         XCTAssertEqual(Achievements.newlyEarned(before: before + [daily], after: before + [daily], calendar: utc), [])
@@ -195,9 +195,9 @@ final class LibraryOrderTests: XCTestCase {
     func testSortOrders() {
         let songs = [song("1", "song 10"), song("2", "Song 2"), song("3", "Ápple"), song("4", "banana")]
         var history = GameHistory()
-        history.add(run("4", score: 500, minutes: 0))
-        history.add(run("2", score: 900, minutes: 1))
-        history.add(run("4", score: 700, minutes: 2))
+        history.add(makeRun("4", score: 500, minutes: 0))
+        history.add(makeRun("2", score: 900, minutes: 1))
+        history.add(makeRun("4", score: 700, minutes: 2))
         XCTAssertEqual(LibrarySort.title.sorted(songs, history: history).map(\.id), ["3", "4", "2", "1"])
         XCTAssertEqual(LibrarySort.recentlyPlayed.sorted(songs, history: history).map(\.id), ["4", "2", "3", "1"])
         XCTAssertEqual(LibrarySort.mostPlayed.sorted(songs, history: history).map(\.id), ["4", "2", "3", "1"])

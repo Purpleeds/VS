@@ -371,3 +371,17 @@ fix a line, Save (lane updates); Listen Again in another language; Settings togg
   badges; the song sheet has a header with best grade, length, range and video/stems/lyrics icons.
 - **Haptics** (Settings > "Vibrate on hits and combos"): light tap on perfect notes, heavy on combo milestones,
   success/warning at the end of a run.
+
+## 16. Better listening (done)
+
+- **Voice focus** (Core `VoiceFocus`): after `VocalPrep`, the singer's pitch is tracked (`PitchPipeline`) and, where it
+  is known, only that pitch's harmonics are kept (between them -14 dB, below the fundamental -14 dB); consonants and
+  unclear frames pass unchanged. Removes the chords, bass and drums the stem separation leaves in the voice.
+- **Two passes, best per phrase** (Core `HeardWordPicker`): the long-form recogniser listens to the focused voice and
+  to the plain voice; each sung phrase keeps the pass that heard more words, more confidently
+  (`.transcriptionConfidence`). Phrases neither pass heard are retried on their own with the classic recogniser
+  (focused, then plain). Words over silence, duplicates and a recogniser stuck repeating one word are dropped.
+- **Hints:** the long-form recogniser gets the lyrics (or the title) as contextual strings (`AnalysisContext`).
+- **Smarter lyric matching:** distinctive words count more than fillers ("tomorrow" 3, "the" 1), and sound-alike
+  spellings match ("write"/"right", "tomorow"). Heard words keep the recogniser's confidence in `transcript.json`.
+- Language detection listens to the focused voice.

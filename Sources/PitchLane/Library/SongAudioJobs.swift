@@ -143,7 +143,7 @@ private final class UncheckedBox<Value>: @unchecked Sendable {
 }
 
 /// Listens to a song file with on-device speech recognition and returns the words it heard, with times.
-/// Audio is decoded and recognised on the phone, in 30-second pieces; nothing is sent anywhere.
+/// Audio is decoded and recognised on the phone; nothing is sent anywhere.
 enum SongListener {
     enum Failure: LocalizedError {
         case permission
@@ -164,9 +164,12 @@ enum SongListener {
     /// Heard words with their song times. Steps:
     /// 1. decode the (voice) track to 16 kHz mono;
     /// 2. clean it up with Core `VocalPrep` (voice band, sung phrases levelled, silence between them);
-    /// 3. recognise it with the long-form on-device engine (`SpeechTranscriber`), which keeps the song's own timeline;
-    /// 4. if that isn't available or hears almost nothing, recognise each sung phrase on its own with the classic
-    ///    on-device recogniser and stitch the words back onto the timeline by phrase start.
+    /// 3. focus it on the singer with Core `VoiceFocus` (keeps the sung pitch's harmonics, turns leftover music down);
+    /// 4. recognise both the focused and the plain voice with the long-form on-device engine (`SpeechTranscriber`,
+    ///    biased towards `hints`), keeping each phrase from the pass that heard it best (`HeardWordPicker`);
+    /// 5. phrases nobody heard (or everything, if the long-form engine isn't available) go through the classic
+    ///    on-device recogniser one at a time and are stitched back onto the timeline by phrase start;
+    /// 6. tidy: words over silence, duplicates and stuck repeats are dropped.
     /// `locale` nil = work out the language from the singing first (`detectLocale`). Returns the words and the
     /// language actually used ("en-US", "ja-JP", ...).
     static func heardWords(
@@ -181,15 +184,33 @@ enum SongListener {
         AppLog.info("Voice prepared: \(prepared.segments.count) sung phrases, \(Int(sung)) s of \(Int(Double(samples.count) / rate)) s", category: "lyrics")
         let fallbackLocale = requested ?? Locale.current
         guard !prepared.segments.isEmpty else { return ([], identifier(fallbackLocale)) }
+        progress(0.02)
+        let focus = VoiceFocus.apply(prepared.samples, sampleRate: rate)
+        try Task.checkCancellation()
+        AppLog.info("Voice focus: pitch followed in \(Int((focus.focusedFraction * 100).rounded())) % of the sound", category: "lyrics")
+        let voice = Voice(plain: prepared.samples, focused: focus.samples, segments: prepared.segments)
         var locale = fallbackLocale
         if requested == nil {
-            if let detected = await detectLocale(prepared, progress: { progress(0.2 * $0) }) {
+            if let detected = await detectLocale(voice, progress: { progress(0.05 + 0.15 * $0) }) {
                 locale = detected
             }
             AppLog.info("Language detected from the singing: \(identifier(locale))", category: "lyrics")
         }
-        let words = try await heardWords(prepared: prepared, locale: locale, hints: hints) { progress(0.2 + 0.8 * $0) }
+        let words = try await heardWords(voice: voice, locale: locale, hints: hints) { progress(0.2 + 0.8 * $0) }
         return (words, identifier(locale))
+    }
+
+    /// The prepared voice two ways: plain (`VocalPrep`) and focused on the sung pitch (`VoiceFocus`).
+    struct Voice: Sendable {
+        var plain: [Float]
+        var focused: [Float]
+        var segments: [VocalPrep.Segment]
+
+        func slice(_ samples: [Float], _ segment: VocalPrep.Segment, maxLength: Double = .infinity) -> [Float] {
+            let lo = max(0, Int(segment.start * SongListener.rate))
+            let hi = min(samples.count, Int(min(segment.end, segment.start + maxLength) * SongListener.rate))
+            return hi > lo ? Array(samples[lo..<hi]) : []
+        }
     }
 
     static func identifier(_ locale: Locale) -> String {
@@ -201,14 +222,14 @@ enum SongListener {
 
     /// Tries each candidate recogniser on the longest sung phrases (about 15 s) and keeps the language it is most
     /// confident in, as long as it actually heard words. Nil if nothing was convincing.
-    static func detectLocale(_ prepared: VocalPrep.Prepared, progress: @escaping @Sendable (Double) -> Void) async -> Locale? {
+    static func detectLocale(_ voice: Voice, progress: @escaping @Sendable (Double) -> Void) async -> Locale? {
         var seen = Set<String>()
         let candidates = ([identifier(Locale.current)] + detectionCandidates).filter { id in
             seen.insert(String(id.prefix(2)).lowercased()).inserted
         }
         var sample: [VocalPrep.Segment] = []
         var total = 0.0
-        for segment in prepared.segments.sorted(by: { $0.duration > $1.duration }) where total < 15 && sample.count < 4 {
+        for segment in voice.segments.sorted(by: { $0.duration > $1.duration }) where total < 15 && sample.count < 4 {
             sample.append(segment)
             total += min(segment.duration, 15)
         }
@@ -220,9 +241,9 @@ enum SongListener {
             var count = 0
             var confidence = 0.0
             for segment in sample {
-                let lo = max(0, Int(segment.start * rate)), hi = min(prepared.samples.count, Int(min(segment.end, segment.start + 15) * rate))
-                guard hi > lo else { continue }
-                let heard = await recognize(Array(prepared.samples[lo..<hi]), recognizer: recognizer, hints: [])
+                let piece = voice.slice(voice.focused, segment, maxLength: 15)
+                guard !piece.isEmpty else { continue }
+                let heard = await recognize(piece, recognizer: recognizer, hints: [])
                 count += heard.words.count
                 confidence += heard.confidence * Double(heard.words.count)
             }
@@ -237,43 +258,69 @@ enum SongListener {
     }
 
     private static func heardWords(
-        prepared: VocalPrep.Prepared, locale: Locale, hints: [String], progress: @escaping @Sendable (Double) -> Void
+        voice: Voice, locale: Locale, hints: [String], progress: @escaping @Sendable (Double) -> Void
     ) async throws -> [LyricListenMatcher.HeardWord] {
-        var words: [HeardWord] = []
-        do {
-            words = try await longForm(prepared.samples, locale: locale) { progress(0.6 * $0) }
-            AppLog.info("Long-form recogniser heard \(words.count) words", category: "lyrics")
-        } catch is CancellationError {
-            throw CancellationError()
-        } catch {
-            AppLog.info("Long-form recogniser unavailable (\(error.localizedDescription)); using phrase-by-phrase", category: "lyrics")
+        // Long-form passes: focused voice first (wins ties), then the plain voice.
+        var passes: [[HeardWord]] = []
+        for (index, input) in [voice.focused, voice.plain].enumerated() {
+            do {
+                let raw = try await longForm(input, locale: locale, hints: hints) { progress(0.3 * Double(index) + 0.3 * $0) }
+                passes.append(splitMultiWord(raw))
+            } catch is CancellationError {
+                throw CancellationError()
+            } catch {
+                AppLog.info("Long-form recogniser unavailable (\(error.localizedDescription)); using phrase-by-phrase", category: "lyrics")
+                break
+            }
         }
-        if words.count < 3 {
-            guard let recognizer = SFSpeechRecognizer(locale: locale), recognizer.isAvailable, recognizer.supportsOnDeviceRecognition else {
-                if words.isEmpty { throw Failure.unavailable }
-                return words
+        var words = HeardWordPicker.bestPerSegment(passes, segments: voice.segments)
+        if !passes.isEmpty {
+            AppLog.info(
+                "Long-form recogniser heard \(passes.map { String($0.count) }.joined(separator: " / ")) words (focused / plain); kept \(words.count)",
+                category: "lyrics"
+            )
+        }
+        progress(0.6)
+
+        // Phrases nothing was heard in: try each on its own with the classic recogniser (focused, then plain).
+        let missing = HeardWordPicker.unheard(words, segments: voice.segments, minDuration: passes.isEmpty ? 0 : 0.8)
+        if !missing.isEmpty {
+            if let recognizer = SFSpeechRecognizer(locale: locale), recognizer.isAvailable, recognizer.supportsOnDeviceRecognition {
+                var filled = 0
+                for (step, index) in missing.enumerated() {
+                    try Task.checkCancellation()
+                    let segment = voice.segments[index]
+                    var heard = await recognize(voice.slice(voice.focused, segment), recognizer: recognizer, hints: hints).words
+                    if heard.isEmpty {
+                        heard = await recognize(voice.slice(voice.plain, segment), recognizer: recognizer, hints: hints).words
+                    }
+                    if !heard.isEmpty { filled += 1 }
+                    words += heard.map { HeardWord(text: $0.text, time: $0.time + segment.start, duration: $0.duration, confidence: $0.confidence) }
+                    progress(0.6 + 0.38 * Double(step + 1) / Double(missing.count))
+                }
+                AppLog.info("Phrase-by-phrase recogniser: words in \(filled) of \(missing.count) phrases that were still empty", category: "lyrics")
+            } else if passes.isEmpty {
+                throw Failure.unavailable
             }
-            var stitched: [HeardWord] = []
-            for (index, segment) in prepared.segments.enumerated() {
-                try Task.checkCancellation()
-                let lo = max(0, Int(segment.start * rate)), hi = min(prepared.samples.count, Int(segment.end * rate))
-                guard hi > lo else { continue }
-                let heard = await recognize(Array(prepared.samples[lo..<hi]), recognizer: recognizer, hints: hints).words
-                stitched += heard.map { HeardWord(text: $0.text, time: $0.time + segment.start, duration: $0.duration) }
-                progress(0.6 + 0.4 * Double(index + 1) / Double(prepared.segments.count))
-            }
-            AppLog.info("Phrase-by-phrase recogniser heard \(stitched.count) words", category: "lyrics")
-            if stitched.count > words.count { words = stitched }
+        }
+        let split = splitMultiWord(words)
+        let cleaned = HeardWordPicker.clean(split, segments: voice.segments)
+        if cleaned.count != split.count {
+            AppLog.debug("Tidied heard words: \(split.count) -> \(cleaned.count)", category: "lyrics")
         }
         progress(1)
-        return splitMultiWord(words).sorted { $0.time < $1.time }
+        return cleaned
     }
 
     /// iOS 26 long-form speech-to-text over the cleaned voice (written to a temporary file), with word times on the
     /// song's own timeline. The language model is managed by iOS; audio stays on the phone.
-    private static func longForm(_ samples: [Float], locale: Locale, progress: @escaping @Sendable (Double) -> Void) async throws -> [HeardWord] {
+    private static func longForm(
+        _ samples: [Float], locale: Locale, hints: [String], progress: @escaping @Sendable (Double) -> Void
+    ) async throws -> [HeardWord] {
         guard let supported = await SpeechTranscriber.supportedLocale(equivalentTo: locale) else { throw Failure.unavailable }
-        let transcriber = SpeechTranscriber(locale: supported, transcriptionOptions: [], reportingOptions: [], attributeOptions: [.audioTimeRange])
+        let transcriber = SpeechTranscriber(
+            locale: supported, transcriptionOptions: [], reportingOptions: [], attributeOptions: [.audioTimeRange, .transcriptionConfidence]
+        )
         if let request = try await AssetInventory.assetInstallationRequest(supporting: [transcriber]) {
             try await request.downloadAndInstall()
         }
@@ -282,6 +329,16 @@ enum SongListener {
         try writeMono(samples, to: file)
         let duration = max(1, Double(samples.count) / rate)
         let analyzer = SpeechAnalyzer(modules: [transcriber])
+        if !hints.isEmpty {
+            // Bias towards words we expect (the lyrics, or the title); harmless where the engine ignores it.
+            let context = AnalysisContext()
+            context.contextualStrings[.general] = Array(hints.prefix(100))
+            do {
+                try await analyzer.setContext(context)
+            } catch {
+                AppLog.debug("Listening hints not used: \(error.localizedDescription)", category: "lyrics")
+            }
+        }
         let collector = Task { () -> [HeardWord] in
             var words: [HeardWord] = []
             for try await result in transcriber.results {
@@ -291,7 +348,8 @@ enum SongListener {
                     guard !text.isEmpty else { continue }
                     let start = range.start.seconds, length = range.duration.seconds
                     guard start.isFinite, length.isFinite else { continue }
-                    words.append(HeardWord(text: text, time: start, duration: max(0.05, length)))
+                    let confidence = run.transcriptionConfidence.map { Double($0) }
+                    words.append(HeardWord(text: text, time: start, duration: max(0.05, length), confidence: confidence))
                     progress(min(1, (start + length) / duration))
                 }
             }
@@ -312,7 +370,9 @@ enum SongListener {
             let parts = word.text.split(whereSeparator: \.isWhitespace).map(String.init)
             guard parts.count > 1 else { return [word] }
             let step = word.duration / Double(parts.count)
-            return parts.enumerated().map { HeardWord(text: $1, time: word.time + Double($0) * step, duration: step) }
+            return parts.enumerated().map {
+                HeardWord(text: $1, time: word.time + Double($0) * step, duration: step, confidence: word.confidence)
+            }
         }
     }
 
@@ -349,7 +409,9 @@ enum SongListener {
             taskBox.value = recognizer.recognitionTask(with: request) { @Sendable result, error in
                 guard (result?.isFinal ?? false) || error != nil else { return }
                 let segments = result?.bestTranscription.segments ?? []
-                let words = segments.map { HeardWord(text: $0.substring, time: $0.timestamp, duration: $0.duration) }
+                let words = segments.map {
+                    HeardWord(text: $0.substring, time: $0.timestamp, duration: $0.duration, confidence: $0.confidence > 0 ? Double($0.confidence) : nil)
+                }
                 let confidence = segments.isEmpty ? 0 : segments.reduce(0.0) { $0 + Double($1.confidence) } / Double(segments.count)
                 once.run { continuation.resume(returning: (words, confidence)) }
             }

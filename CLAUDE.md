@@ -209,6 +209,9 @@ Runs on every push and PR:
 - Recognition and note writing for uploads always prefer the separated voice: `StemMaker` first, then `VocalAnalysis`
   (notes gated by `VocalPrep.segments`) and `SongListener` (`VocalPrep.prepare` → `SpeechTranscriber`, falling back
   to per-phrase `SFSpeechRecognizer`). Both stay on-device; only iOS's own speech model download touches the network.
+- Step 16: `SongListener` runs Core `VoiceFocus` (harmonics of the sung pitch) after `VocalPrep`, recognises focused and
+  plain voice, and keeps the better pass per phrase via Core `HeardWordPicker` (which also drops words over silence,
+  duplicates and stuck repeats). Merging and matching rules stay in Core and tested; the app only runs recognisers.
 
 ## Menu look (step 11)
 

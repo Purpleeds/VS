@@ -2,8 +2,10 @@ import Foundation
 
 /// Times lyrics by matching them against words heard in the recording (speech recognition on the song).
 ///
-/// The heard words and the lyric words are aligned in order (dynamic programming, exact matches worth 2, near
-/// misses worth 1, so the most consistent monotonic pairing wins). Matched lyric words take the heard time;
+/// The heard words and the lyric words are aligned in order (dynamic programming, so the most consistent monotonic
+/// pairing wins). Distinctive words count most (an exact "tomorrow" or "night" is worth 3, "sky" 2, "the" or "you"
+/// 1); near misses and sound-alikes ("tomorow", "knight" for "night", "rite" for "right") count 1-2, so the
+/// alignment hangs on the words that are hard to match by accident. Matched lyric words take the heard time;
 /// the rest are interpolated between their neighbours. Singing is hard for speech recognition, so even a third
 /// of the words matched is plenty to pin every line down.
 public enum LyricListenMatcher {
@@ -11,11 +13,14 @@ public enum LyricListenMatcher {
         public var text: String
         public var time: Double
         public var duration: Double
+        /// The recogniser's confidence in the word (0...1), when it gave one.
+        public var confidence: Double?
 
-        public init(text: String, time: Double, duration: Double = 0.3) {
+        public init(text: String, time: Double, duration: Double = 0.3, confidence: Double? = nil) {
             self.text = text
             self.time = time
             self.duration = duration
+            self.confidence = confidence.flatMap { $0.isFinite ? min(1, max(0, $0)) : nil }
         }
     }
 
@@ -50,6 +55,9 @@ public enum LyricListenMatcher {
         }
         let spoken = heard.filter { $0.time.isFinite && !key($0.text).isEmpty }.prefix(maximumWords).sorted { $0.time < $1.time }
         let spokenKeys = spoken.map { key($0.text) }
+        // Sound keys once per word (the table below compares every pair).
+        let lyricSounds = words.map { phonetic($0.key) }
+        let spokenSounds = spokenKeys.map { phonetic($0) }
         let rows = words.count, cols = spokenKeys.count
         var times = [Double?](repeating: nil, count: rows)
         var matched = 0
@@ -60,7 +68,7 @@ public enum LyricListenMatcher {
             var score = [Int32](repeating: 0, count: (rows + 1) * width)
             for i in 1...rows {
                 for j in 1...cols {
-                    let s = similarity(words[i - 1].key, spokenKeys[j - 1])
+                    let s = similarity(words[i - 1].key, spokenKeys[j - 1], lyricSounds[i - 1], spokenSounds[j - 1])
                     var best = max(score[(i - 1) * width + j], score[i * width + j - 1])
                     if s > 0 { best = max(best, score[(i - 1) * width + j - 1] + Int32(s)) }
                     score[i * width + j] = best
@@ -68,7 +76,7 @@ public enum LyricListenMatcher {
             }
             var i = rows, j = cols
             while i > 0, j > 0 {
-                let s = similarity(words[i - 1].key, spokenKeys[j - 1])
+                let s = similarity(words[i - 1].key, spokenKeys[j - 1], lyricSounds[i - 1], spokenSounds[j - 1])
                 if s > 0, score[i * width + j] == score[(i - 1) * width + j - 1] + Int32(s) {
                     times[i - 1] = spoken[j - 1].time
                     matched += 1
@@ -131,12 +139,63 @@ public enum LyricListenMatcher {
             .map(String.init).joined()
     }
 
-    /// 2 = same word, 1 = near miss (one edit, or a shared 4-letter start), 0 = different.
+    /// Score of pairing lyric word `a` with heard word `b` (both `key`s): 0 = different.
+    /// Exact: 3 for distinctive words (4+ letters, not a filler), 2 for other words, 1 for fillers ("the", "oh").
+    /// Sounds alike (same consonant skeleton): 2 for 3+ sounds ("tomorow"), 1 for two ("knight"/"night").
+    /// Near miss (one edit, or a shared 4-letter start): 1.
     static func similarity(_ a: String, _ b: String) -> Int {
+        similarity(a, b, phonetic(a), phonetic(b))
+    }
+
+    /// Same, with the words' `phonetic` keys already worked out.
+    static func similarity(_ a: String, _ b: String, _ soundA: String?, _ soundB: String?) -> Int {
         if a.isEmpty || b.isEmpty { return 0 }
-        if a == b { return 2 }
+        if a == b {
+            if fillers.contains(a) { return 1 }
+            return a.count >= 4 && a.unicodeScalars.allSatisfy(\.isASCII) ? 3 : 2
+        }
+        if a.count >= 3, b.count >= 3, let pa = soundA, let pb = soundB, pa == pb {
+            if pa.count >= 3 { return 2 }
+            if pa.count == 2, a.count >= 4, b.count >= 4 { return 1 }
+        }
         if VoiceQuery.similar(a, b) { return 1 }
         if a.count >= 5, b.count >= 5, a.prefix(4) == b.prefix(4) { return 1 }
         return 0
+    }
+
+    /// Short words that turn up everywhere; matching one proves little.
+    static let fillers: Set<String> = [
+        "a", "an", "the", "and", "or", "of", "to", "in", "on", "at", "is", "it", "i", "im", "me", "my", "be", "so",
+        "oh", "ooh", "ah", "uh", "um", "mm", "yeah", "na", "la", "hey", "do", "no", "we", "you", "your", "for",
+    ]
+
+    /// A rough English sound key: silent letters and spellings of the same sound folded together, vowels dropped
+    /// after the first letter, doubles collapsed ("knight" and "night" → "nt"; "write", "right" → "rt";
+    /// "phone" → "fn"). Nil for words that aren't plain ASCII letters (other scripts match exactly or by edit).
+    static func phonetic(_ key: String) -> String? {
+        guard !key.isEmpty, key.unicodeScalars.allSatisfy({ $0.isASCII && CharacterSet.lowercaseLetters.contains($0) }) else { return nil }
+        var w = key
+        for (prefix, replacement) in [("kn", "n"), ("wr", "r"), ("wh", "w"), ("gn", "n"), ("ps", "s")] where w.hasPrefix(prefix) {
+            w = replacement + w.dropFirst(prefix.count)
+        }
+        for (from, to) in [("tch", "ch"), ("ph", "f"), ("ck", "k"), ("gh", ""), ("sch", "sk"), ("qu", "kw"), ("x", "ks"), ("z", "s")] {
+            w = w.replacingOccurrences(of: from, with: to)
+        }
+        let letters = Array(w)
+        var out: [Character] = []
+        for (index, letter) in letters.enumerated() {
+            var c = letter
+            if c == "c" {
+                let next = index + 1 < letters.count ? letters[index + 1] : " "
+                c = "eiy".contains(next) ? "s" : "k"
+            }
+            if c == "q" { c = "k" }
+            if c == "y", index > 0 { c = "a" }
+            if index > 0, "aeiou".contains(c) { continue }
+            if c == "h", index > 0 { continue }
+            if let last = out.last, last == c { continue }
+            out.append(c)
+        }
+        return String(out)
     }
 }

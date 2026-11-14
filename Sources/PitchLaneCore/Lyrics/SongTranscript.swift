@@ -52,7 +52,12 @@ public struct SongTranscript: Codable, Sendable, Equatable {
     static func clean(_ words: [LyricListenMatcher.HeardWord]) -> [LyricListenMatcher.HeardWord] {
         let sorted = words
             .filter { $0.time.isFinite && $0.duration.isFinite && $0.time >= 0 && $0.time <= SongLimits.maximumAbsoluteStart }
-            .map { LyricListenMatcher.HeardWord(text: $0.text.trimmingCharacters(in: .whitespacesAndNewlines), time: $0.time, duration: max(0.05, min(10, $0.duration))) }
+            .map {
+                LyricListenMatcher.HeardWord(
+                    text: $0.text.trimmingCharacters(in: .whitespacesAndNewlines), time: $0.time,
+                    duration: max(0.05, min(10, $0.duration)), confidence: $0.confidence
+                )
+            }
             .filter { !$0.text.isEmpty }
             .sorted { $0.time < $1.time }
         return Array(sorted.prefix(SongLimits.maximumNotes))

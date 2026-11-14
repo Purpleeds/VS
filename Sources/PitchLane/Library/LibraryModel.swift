@@ -302,7 +302,8 @@ final class LibraryModel: ObservableObject {
             }
             // 3. Notes from the singer's voice only.
             stage("Writing notes from the singing")
-            let notes = try await VocalAnalysis.notes(from: split ? vocals : soundtrack, progress: report)
+            let analysis = try await VocalAnalysis.analyze(from: split ? vocals : soundtrack, progress: report)
+            let notes = analysis.notes
             try Task.checkCancellation()
             guard notes.count >= 3 else {
                 AppLog.warning("Upload: only \(notes.count) notes found", category: "library")
@@ -325,6 +326,8 @@ final class LibraryModel: ObservableObject {
             if isVideo { made = try store.attachVideo(from: job.url, to: made) }
             made = try store.attachBackingAudio(from: soundtrack, to: made)
             if split { made = try store.attachStems(vocals: vocals, music: music, to: made) }
+            // The singer's pitch, kept so notes can be written word by word once the words are heard.
+            try? store.saveVoicePitch(analysis.track, for: made)
             reload()
             let summary = made.summary
             AppLog.info(
@@ -580,7 +583,9 @@ final class LibraryModel: ObservableObject {
         // Heard words are saved: reuse them instead of listening again (Listen Again in the sheet refreshes them).
         if let saved = transcripts[song.id], !saved.isEmpty, Self.sameLanguage(saved.language, languageID) {
             AppLog.info("Timing lyrics with the saved heard words (\(saved.words.count))", category: "lyrics")
-            finishLyrics(synced: synced, plain: plain, credit: credit, songID: song.id, heard: saved.words, listenProblem: nil)
+            withVoicePitch(current) { [weak self] in
+                self?.finishLyrics(synced: synced, plain: plain, credit: credit, songID: song.id, heard: saved.words, listenProblem: nil)
+            }
             return
         }
         let source = current.hasStems ? "voice" : "mix"
@@ -602,6 +607,10 @@ final class LibraryModel: ObservableObject {
             }
             if let heard, !heard.isEmpty {
                 self?.remember(SongTranscript(language: languageID, source: source, words: heard), for: song.id)
+                self?.songJob = SongJob(songID: song.id, title: "Following the singer's pitch…", progress: 0)
+                _ = await self?.ensureVoicePitch(songID: song.id) { [weak self] fraction in
+                    Task { @MainActor in self?.songJob?.progress = fraction }
+                }
             }
             self?.endSongJob()
             self?.finishLyrics(synced: synced, plain: plain, credit: credit, songID: song.id, heard: heard, listenProblem: problem)
@@ -675,6 +684,28 @@ final class LibraryModel: ObservableObject {
                 "Listening heard \(heard.count) words; matched \(match.matchedWords)/\(match.totalWords) lyric words (\(enough ? "used" : "not enough"))",
                 category: "lyrics"
             )
+            if enough, current.source == .video, let track = store.loadVoicePitch(for: current), !track.isEmpty {
+                let built = WordNotes.build(words: Self.timedWords(match.lines), track: track)
+                if built.notes.count >= 3 {
+                    var updated = current
+                    updated.notes = built.notes
+                    updated.lineBreaks = match.lines.dropFirst().compactMap { $0.words.first?.time }
+                    updated.lyricsCredit = SongLimits.clip(credit)
+                    do {
+                        try store.save(updated)
+                        reload()
+                        AppLog.info("Lyrics written as notes from the voice: \(built.notes.count) notes, \(built.borrowedPitch) borrowed pitch", category: "lyrics")
+                        message = Message(
+                            title: "Lyrics added",
+                            text: "Timed by listening to the song (recognised \(match.matchedWords) of \(match.totalWords) words). "
+                                + "Every word has its own bar at the pitch the singer sings it: \(built.notes.count) notes."
+                        )
+                    } catch {
+                        message = Message(title: "Couldn't save the lyrics", text: error.localizedDescription)
+                    }
+                    return
+                }
+            }
             if enough {
                 result = LyricAligner.apply(lines: match.lines, to: current, autoOffset: false)
                 how = "Timed by listening to the song: recognised \(match.matchedWords) of \(match.totalWords) words."
@@ -761,6 +792,7 @@ final class LibraryModel: ObservableObject {
             guard !transcript.isEmpty else {
                 return "No words could be recognised. Try Separate Voice and Music first, or another listening language."
             }
+            _ = await ensureVoicePitch(songID: song.id, progress: progress)
             var text = applyTranscript(transcript, to: song.id)
             if predicted.changed > 0 { text += " The word predictor fixed \(predicted.changed) of them." }
             return text
@@ -778,6 +810,39 @@ final class LibraryModel: ObservableObject {
         guard let current = imported.first(where: { $0.id == songID }) else { return "" }
         let script = LyricScript.detect(transcript.words.map(\.text))
         let units = LyricRomanizer.units(transcript.words, script: script)
+        let languageName = Self.listeningLanguages.first { $0.id == transcript.language }?.name ?? transcript.language
+        // Songs PitchLane wrote from a recording: one bar per sung word, at the pitch the singer sang it (from the
+        // separated voice), so every lyric has a bar and nothing follows the backing.
+        if current.source == .video, let track = store.loadVoicePitch(for: current), !track.isEmpty {
+            let built = WordNotes.build(words: units, track: track)
+            if built.notes.count >= 3 {
+                var updated = current
+                updated.notes = built.notes
+                updated.lineBreaks = built.lineBreaks
+                if !onlySungNotes {
+                    // Keep earlier notes where no words were heard (hummed or wordless parts).
+                    let wordless = current.notes.filter { note in
+                        !built.notes.contains { $0.start < note.end + 0.2 && note.start < $0.end + 0.2 }
+                    }
+                    if !wordless.isEmpty {
+                        updated.notes = (built.notes + wordless.map { var n = $0; n.lyric = ""; return n }).sorted { $0.start < $1.start }
+                        updated.lineBreaks = MelodyTranscriber.lineBreaks(for: updated.notes)
+                    }
+                }
+                updated.lyricsCredit = SongLimits.clip("Heard by PitchLane (\(languageName)\(transcript.edited ? ", edited" : ""))")
+                do {
+                    try store.save(updated)
+                    reload()
+                } catch {
+                    return "The words couldn't be saved (\(error.localizedDescription))."
+                }
+                AppLog.info(
+                    "Heard words written as notes from the voice: \(units.count) units, \(built.notes.count) notes, \(built.borrowedPitch) borrowed pitch",
+                    category: "lyrics"
+                )
+                return "Heard \(transcript.words.count) words. Each one has its own bar at the pitch the singer sings it (\(built.notes.count) notes)."
+            }
+        }
         let lines = SongTranscript.lyricLines(from: units)
         // Songs PitchLane wrote from a recording: drop the parts nobody sings words in (solos, riffs, leftover
         // backing), so there's nothing to hum. Imported note files (UltraStar, MIDI) are never touched.
@@ -798,7 +863,6 @@ final class LibraryModel: ObservableObject {
         let result = LyricAligner.apply(lines: lines, to: base, autoOffset: false)
         guard result.wordsPlaced > 0 else { return "The heard words didn't line up with any notes." }
         var updated = result.song
-        let languageName = Self.listeningLanguages.first { $0.id == transcript.language }?.name ?? transcript.language
         updated.lyricsCredit = SongLimits.clip("Heard by PitchLane (\(languageName)\(transcript.edited ? ", edited" : ""))")
         do {
             try store.save(updated)
@@ -862,7 +926,17 @@ final class LibraryModel: ObservableObject {
             guard let vocals = self.stems(for: song)?.vocals else { return }
             self.songJob = SongJob(songID: song.id, title: "Writing notes from the singer's voice…", progress: 0)
             do {
-                let notes = try await VocalAnalysis.notes(from: vocals, progress: report)
+                let analysis = try await VocalAnalysis.analyze(from: vocals, progress: report)
+                let notes = analysis.notes
+                guard let saved = self.imported.first(where: { $0.id == song.id }) else { return }
+                try? self.store.saveVoicePitch(analysis.track, for: saved)
+                // With heard words, every word gets its own bar at the sung pitch.
+                if let transcript = self.transcripts[song.id], !transcript.isEmpty, !analysis.track.isEmpty {
+                    let text = self.applyTranscript(transcript, to: song.id)
+                    AppLog.info("Notes rewritten from the words and the voice", category: "library")
+                    self.message = Message(title: "Notes rewritten", text: text)
+                    return
+                }
                 guard notes.count >= 3, var current = self.imported.first(where: { $0.id == song.id }) else {
                     self.message = Message(title: "No singing found", text: "The separated voice had no clear melody, so the notes were kept.")
                     return
@@ -872,11 +946,10 @@ final class LibraryModel: ObservableObject {
                 try self.store.save(current)
                 self.reload()
                 AppLog.info("Notes rewritten from the voice: \(notes.count)", category: "library")
-                var text = "\(notes.count) notes from the singer's voice."
-                if let transcript = self.transcripts[song.id] {
-                    text += " " + self.applyTranscript(transcript, to: song.id)
-                }
-                self.message = Message(title: "Notes rewritten", text: text)
+                self.message = Message(
+                    title: "Notes rewritten",
+                    text: "\(notes.count) notes from the singer's voice. Write Lyrics by Listening to give every word its own bar."
+                )
             } catch is CancellationError {
                 AppLog.info("Rewriting notes cancelled", category: "library")
             } catch {
@@ -888,7 +961,61 @@ final class LibraryModel: ObservableObject {
     /// Song sheet: put the saved heard words back on the notes (e.g. after trying other lyrics).
     func useHeardWords(_ song: Song) {
         guard let transcript = transcripts[song.id] else { return }
-        message = Message(title: "Heard words", text: applyTranscript(transcript, to: song.id))
+        withVoicePitch(song) { [weak self] in
+            guard let self else { return }
+            self.message = Message(title: "Heard words", text: self.applyTranscript(transcript, to: song.id))
+        }
+    }
+
+    /// Runs `body` once a song made from a recording has its voice pitch (analysing it first, as a song job, when it
+    /// was never saved, e.g. for songs made before notes were written word by word). Other songs run it straight away.
+    private func withVoicePitch(_ song: Song, _ body: @escaping @MainActor () -> Void) {
+        let current = imported.first { $0.id == song.id } ?? song
+        guard current.source == .video, store.loadVoicePitch(for: current) == nil, songJobTask == nil,
+              stems(for: current) != nil || store.backingAudioURL(for: current) != nil else {
+            body()
+            return
+        }
+        songJob = SongJob(songID: song.id, title: "Following the singer's pitch…", progress: 0)
+        songJobTask = Task { [weak self] in
+            _ = await self?.ensureVoicePitch(songID: song.id) { [weak self] fraction in
+                Task { @MainActor in self?.songJob?.progress = fraction }
+            }
+            self?.endSongJob()
+            if !Task.isCancelled { body() }
+        }
+    }
+
+    /// The singer's pitch for a song made from a recording: the saved one, else analysed now from the separated voice
+    /// (or the whole recording when it isn't separated) and saved. Nil for other songs, or with no audio.
+    private func ensureVoicePitch(songID: String, progress: @escaping @Sendable (Double) -> Void) async -> PitchTrack? {
+        guard let song = imported.first(where: { $0.id == songID }), song.source == .video else { return nil }
+        if let saved = store.loadVoicePitch(for: song), !saved.isEmpty { return saved }
+        guard let audio = stems(for: song)?.vocals ?? store.backingAudioURL(for: song) else { return nil }
+        do {
+            let track = try await VocalAnalysis.analyze(from: audio, progress: progress).track
+            if let latest = imported.first(where: { $0.id == songID }) { try? store.saveVoicePitch(track, for: latest) }
+            AppLog.info("Voice pitch analysed for a song (\(stems(for: song) != nil ? "voice" : "whole mix"))", category: "library")
+            return track
+        } catch {
+            AppLog.warning("Voice pitch couldn't be analysed: \(error.localizedDescription)", category: "library")
+            return nil
+        }
+    }
+
+    /// Lyric words timed by listening, with lengths: until the next word (at most 1.5 s), shorter at line ends.
+    private static func timedWords(_ lines: [LyricLine]) -> [LyricListenMatcher.HeardWord] {
+        var words: [(text: String, time: Double, lineEnd: Bool)] = []
+        for line in lines {
+            let timed = line.words.compactMap { word in word.time.map { (word.text, $0) } }
+            for (index, word) in timed.enumerated() { words.append((word.0, word.1, index == timed.count - 1)) }
+        }
+        return words.enumerated().map { index, word in
+            let next = index + 1 < words.count ? words[index + 1].time : word.time + 0.8
+            let gap = next - word.time
+            let duration = word.lineEnd ? min(0.8, max(0.15, gap - 0.05)) : min(1.5, max(0.1, gap - 0.02))
+            return LyricListenMatcher.HeardWord(text: word.text, time: word.time, duration: duration)
+        }
     }
 
     /// Saves hand-corrected heard words and puts them on the notes; the word predictor learns from the changes.
@@ -901,7 +1028,10 @@ final class LibraryModel: ObservableObject {
             try store.saveTranscript(transcript, for: song)
             transcripts[song.id] = transcript
             AppLog.info("Heard words edited (\(transcript.words.count) words)", category: "lyrics")
-            message = Message(title: "Words updated", text: applyTranscript(transcript, to: song.id))
+            withVoicePitch(song) { [weak self] in
+                guard let self else { return }
+                self.message = Message(title: "Words updated", text: self.applyTranscript(transcript, to: song.id))
+            }
         } catch {
             message = Message(title: "Couldn't save the words", text: error.localizedDescription)
         }
@@ -909,6 +1039,11 @@ final class LibraryModel: ObservableObject {
 
     /// Song sheet "Improve Words": predicts the words again from what was heard, with everything learned since.
     func improveHeardWords(_ song: Song) {
+        guard songJobTask == nil, transcripts[song.id] != nil else { return }
+        withVoicePitch(song) { [weak self] in self?.predictAgain(song) }
+    }
+
+    private func predictAgain(_ song: Song) {
         guard songJobTask == nil, let transcript = transcripts[song.id] else { return }
         let raw = transcript.rawWords ?? transcript.words
         let notes = (imported.first { $0.id == song.id } ?? song).notes

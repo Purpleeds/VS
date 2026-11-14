@@ -443,3 +443,14 @@ fix a line, Save (lane updates); Listen Again in another language; Settings togg
   hints. `SongTranscript.rawWords` keeps what was heard so "Improve Words" can predict again later.
 - UI: Settings > Word predictor (toggle, Words to Know, learned counts, Forget What It Learned); song sheet "Improve
   Words" and the number of words fixed.
+
+## 21. Notes from the sung words (done)
+
+- Songs made from a recording get **one bar per sung word**, at the pitch the singer sings it (Core `WordNotes` over the
+  separated voice's `PitchTrack`): steady words are one note carrying the word; melismas split into "~" notes that
+  glide; words with no clear pitch borrow the nearest sung pitch, then a neighbour's, so no lyric is left without a bar.
+- The voice's pitch is analysed with the notes (`VocalAnalysis.analyze`) and saved as `voice-pitch.json` (MIDI × 100),
+  dropped when the voice track or backing changes. Older songs analyse it the first time words are put on notes.
+- Used by listening (upload, Listen Again), Use Heard Words, Edit Heard Words, Improve Words, Rewrite Notes from the
+  Voice, and lyrics timed by listening (each lyric word gets its bar). With "Notes only where words are sung" off,
+  earlier notes outside the words are kept. Imported note files and built-ins are unchanged.

@@ -533,28 +533,38 @@ enum SongListener {
 
 typealias HeardWord = LyricListenMatcher.HeardWord
 /// Notes written from the singer's voice only: pitch frames outside sung phrases (instrument leakage, breaths,
-/// silence) are dropped, so the lane holds the vocal melody, not the backing.
+/// silence) are dropped, so the lane holds the vocal melody, not the backing. Also returns the singer's pitch over the
+/// whole song (`PitchTrack`), which notes are later rewritten from, word by word, once the words are known.
 enum VocalAnalysis {
-    static func notes(from url: URL, progress: @escaping @Sendable (Double) -> Void) async throws -> [SongNote] {
+    static func analyze(from url: URL, progress: @escaping @Sendable (Double) -> Void) async throws -> (notes: [SongNote], track: PitchTrack) {
         let rate = SongListener.rate
         let samples = try await SongListener.decodeMono(url)
         try Task.checkCancellation()
         let segments = VocalPrep.segments(VocalPrep.voiceBand(samples, sampleRate: rate), sampleRate: rate)
         let pipeline = PitchPipeline(inputSampleRate: rate)
         var transcriber = MelodyTranscriber()
+        var times: [Double] = []
+        var pitches: [Double?] = []
+        times.reserveCapacity(Int(Double(samples.count) / rate * 100) + 1)
+        pitches.reserveCapacity(times.capacity)
         let piece = Int(rate)
         var index = 0
         while index < samples.count {
             try Task.checkCancellation()
             let end = min(samples.count, index + piece)
             for frame in pipeline.process(Array(samples[index..<end])) {
-                transcriber.add(time: frame.time, midi: VocalPrep.contains(segments, frame.time) ? frame.midi : nil)
+                let sung = VocalPrep.contains(segments, frame.time)
+                transcriber.add(time: frame.time, midi: sung ? frame.midi : nil)
+                times.append(frame.time)
+                pitches.append(frame.midi)
             }
             index = end
             if index % (piece * 5) == 0 { progress(Double(index) / Double(samples.count)) }
         }
         progress(1)
-        return transcriber.finish()
+        let track = PitchTrack(times: times, midi: pitches)
+        AppLog.info("Voice pitch: \(Int(Double(pitches.compactMap { $0 }.count) / Double(max(1, pitches.count)) * 100)) % of frames voiced", category: "library")
+        return (transcriber.finish(), track)
     }
 }
 #endif

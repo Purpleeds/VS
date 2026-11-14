@@ -219,6 +219,12 @@ Runs on every push and PR:
   `onlySungNotes`) only ever removes notes from `SongSource.video` songs, only when heard words exist, and keeps at
   least 3 notes; never from UltraStar/MIDI imports or built-ins.
 
+## Notes from words (step 21)
+
+- For `SongSource.video` songs with words (heard or timed lyrics), notes are written by Core `WordNotes` from the words
+  and the separated voice's `PitchTrack` (`voice-pitch.json` via `SongLibraryStore`, invalidated with stems/backing):
+  every word gets a bar at the sung pitch. `LyricAligner` placement stays for UltraStar/MIDI songs.
+
 ## Word predictor (step 20)
 
 - Word prediction is Core and tested: `WordPredictor` (model + Viterbi), `WordModel` (what it learned), `WordAlignment`,

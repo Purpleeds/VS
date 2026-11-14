@@ -117,9 +117,25 @@ public struct SongLibraryStore: Sendable {
             try? fileManager.removeItem(at: staleStems.vocals)
             try? fileManager.removeItem(at: staleStems.music)
         }
-        // So were the heard words.
+        // So were the heard words and the voice's pitch.
         deleteTranscript(for: song)
+        deleteVoicePitch(for: song)
         return updated
+    }
+
+    public static let voicePitchName = "voice-pitch.json"
+
+    /// The singer's pitch over the song (from the separated voice), if it was analysed.
+    public func loadVoicePitch(for song: Song) -> PitchTrack? {
+        try? JSONFileStore<PitchTrack>(url: folder(for: song.id).appendingPathComponent(Self.voicePitchName), compact: true).load()
+    }
+
+    public func saveVoicePitch(_ track: PitchTrack, for song: Song) throws {
+        try JSONFileStore<PitchTrack>(url: folder(for: song.id).appendingPathComponent(Self.voicePitchName), compact: true).save(track)
+    }
+
+    public func deleteVoicePitch(for song: Song) {
+        try? FileManager.default.removeItem(at: folder(for: song.id).appendingPathComponent(Self.voicePitchName))
     }
 
     public static let transcriptName = "transcript.json"
@@ -166,6 +182,8 @@ public struct SongLibraryStore: Sendable {
         updated.vocalsStemFile = Self.vocalsStemName
         updated.musicStemFile = Self.musicStemName
         try save(updated)
+        // A new voice track: its pitch must be analysed again.
+        deleteVoicePitch(for: song)
         return updated
     }
 
@@ -180,6 +198,7 @@ public struct SongLibraryStore: Sendable {
             try? FileManager.default.removeItem(at: urls.vocals)
             try? FileManager.default.removeItem(at: urls.music)
         }
+        deleteVoicePitch(for: song)
         return updated
     }
 

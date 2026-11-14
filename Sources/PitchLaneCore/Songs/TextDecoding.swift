@@ -1,7 +1,7 @@
 import Foundation
 
-/// Text decoding for imported files: UTF-8 (with or without BOM), UTF-16 with BOM, otherwise
-/// Windows-1252 (a superset of printable Latin-1, which is what most older UltraStar files use).
+/// Text decoding for imported files: UTF-8 (with or without BOM), UTF-16 with BOM, Shift-JIS when it clearly is
+/// Japanese, otherwise Windows-1252 (a superset of printable Latin-1, which is what most older UltraStar files use).
 public enum TextDecoding {
     public static func decode(_ data: Data) -> String {
         let bytes = [UInt8](data)
@@ -15,7 +15,35 @@ public enum TextDecoding {
         if let text = String(validating: bytes, as: UTF8.self) {
             return text
         }
+        if let text = shiftJIS(bytes) {
+            return text
+        }
         return windows1252(bytes)
+    }
+
+    /// Shift-JIS (older Japanese UltraStar and MIDI lyric files), only when the bytes look like it and decode to
+    /// real Japanese: at least two kana, so Latin text with accents (which can form valid SJIS byte pairs) isn't
+    /// mistaken for it. Nil when it doesn't look like Shift-JIS or the platform can't decode it.
+    public static func shiftJIS(_ bytes: [UInt8]) -> String? {
+        var pairs = 0
+        var i = 0
+        while i < bytes.count {
+            let b = bytes[i]
+            if (0x81...0x9F).contains(b) || (0xE0...0xFC).contains(b) {
+                guard i + 1 < bytes.count else { return nil }
+                let trail = bytes[i + 1]
+                guard (0x40...0x7E).contains(trail) || (0x80...0xFC).contains(trail) else { return nil }
+                pairs += 1
+                i += 2
+            } else {
+                i += 1
+            }
+        }
+        guard pairs > 0, let text = String(data: Data(bytes), encoding: .shiftJIS) else { return nil }
+        let kana = text.unicodeScalars.filter { Kana.isKana($0) }.count
+        let japanese = text.unicodeScalars.filter { Kana.isKana($0) || Kana.isKanji($0) }.count
+        guard kana >= 2, japanese * 2 >= pairs else { return nil }
+        return text
     }
 
     /// Bytes 0x80-0x9F that Windows-1252 maps away from Latin-1 (undefined ones stay as-is).

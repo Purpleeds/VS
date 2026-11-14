@@ -35,6 +35,8 @@ public struct AppSettings: Codable, Equatable, Sendable {
     /// Separated songs: how loud the singer's voice and the music play (0...1 each).
     public var voiceStemVolume: Double
     public var musicStemVolume: Double
+    /// How songs with Japanese lyrics show their words on the lane.
+    public var japaneseLyrics: JapaneseLyricsMode
     /// Guide tone on for Easy/Normal (default on) and Hard (default off).
     public var guideOnEasyNormal: Bool
     public var guideOnHard: Bool
@@ -58,7 +60,8 @@ public struct AppSettings: Codable, Equatable, Sendable {
         failEnabled: Bool = true,
         showVideo: Bool = true,
         voiceStemVolume: Double = 0.3,
-        musicStemVolume: Double = 1
+        musicStemVolume: Double = 1,
+        japaneseLyrics: JapaneseLyricsMode = .romaji
     ) {
         self.debugOverlay = debugOverlay
         self.accidentals = accidentals
@@ -79,6 +82,7 @@ public struct AppSettings: Codable, Equatable, Sendable {
         self.showVideo = showVideo
         self.voiceStemVolume = voiceStemVolume
         self.musicStemVolume = musicStemVolume
+        self.japaneseLyrics = japaneseLyrics
     }
 
     public static let noiseGateRange: ClosedRange<Double> = -65 ... -30
@@ -122,6 +126,7 @@ public struct AppSettings: Codable, Equatable, Sendable {
         case showVideo
         case voiceStemVolume
         case musicStemVolume
+        case japaneseLyrics
     }
 
     public init(from decoder: Decoder) throws {
@@ -146,5 +151,23 @@ public struct AppSettings: Codable, Equatable, Sendable {
         self.showVideo = container.lenient(Bool.self, forKey: .showVideo) ?? true
         self.voiceStemVolume = min(1, max(0, container.lenient(Double.self, forKey: .voiceStemVolume) ?? 0.3))
         self.musicStemVolume = min(1, max(0, container.lenient(Double.self, forKey: .musicStemVolume) ?? 1))
+        self.japaneseLyrics = container.lenient(JapaneseLyricsMode.self, forKey: .japaneseLyrics) ?? .romaji
+    }
+}
+
+/// Japanese lyrics on the lane: romaji, romaji with the original underneath, or the original script.
+public enum JapaneseLyricsMode: String, Codable, Sendable, CaseIterable, Identifiable {
+    case romaji
+    case both
+    case original
+
+    public var id: String { rawValue }
+
+    public var displayName: String {
+        switch self {
+        case .romaji: return "Romaji"
+        case .both: return "Romaji + Japanese"
+        case .original: return "Japanese"
+        }
     }
 }

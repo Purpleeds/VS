@@ -397,3 +397,17 @@ fix a line, Save (lane updates); Listen Again in another language; Settings togg
   on): when heard words are put on a song PitchLane wrote from a recording (`SongSource.video`), phrases with no
   words are left out and hummed lead-ins/tails over 1 s from the words are trimmed. Never applied to imported note
   files or built-ins, nor when no words were heard. Rewrite Notes from the Voice (with the setting off) restores them.
+
+## 18. General upgrades (done)
+
+- **Badges** (Core `Achievements`, worked out from `history.json`, nothing new stored): 15 badges (first song, 10/50
+  finished, A, S, 25/100 combo, Hard, 5 songs, every sample song, 3/7-day streaks, practice, another key, song of the
+  day). Stats shows the grid (locked ones say how to earn them); the results screen shows badges the run earned.
+- **Toughest line** (Core `LineReport`): per-line accuracy of a full run; the results screen names the weakest line
+  (3+ notes, under 85 %) and "Practice this line" starts a no-fail loop around it at 80 % speed (same difficulty
+  and key; the old game screen closes before the new one opens).
+- **Library:** favourites (swipe right or long-press a song; a Favourites section on top; `AppSettings.favoriteSongs`,
+  built-ins as `builtin.<kind>`), and sorting your songs by title, recently played, most played or best score
+  (Core `LibrarySort`, `AppSettings.librarySort`).
+- **Song of the day** (Core `DailySong`): one built-in a day (steps 7 through the list, so never twice running), a
+  Home card to play it, +50 XP for the first finish each day (`PlayerProgress`).

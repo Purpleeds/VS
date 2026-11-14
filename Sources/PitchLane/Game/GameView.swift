@@ -10,6 +10,7 @@ struct GameView: View {
     let videoURL: URL?
     let stems: BackingStems?
     let options: GameOptions
+    let onPractice: ((PracticeOptions) -> Void)?
 
     @StateObject private var session: GameSession
     @EnvironmentObject private var audio: AudioInput
@@ -20,7 +21,11 @@ struct GameView: View {
     @State private var started = false
     @State private var showRouteWarning = true
 
-    init(song: Song, backingURL: URL?, videoURL: URL? = nil, stems: BackingStems? = nil, lyrics: LyricDisplay? = nil, options: GameOptions) {
+    init(
+        song: Song, backingURL: URL?, videoURL: URL? = nil, stems: BackingStems? = nil, lyrics: LyricDisplay? = nil,
+        options: GameOptions, onPractice: ((PracticeOptions) -> Void)? = nil
+    ) {
+        self.onPractice = onPractice
         self.song = song
         self.backingURL = backingURL
         self.videoURL = videoURL
@@ -33,14 +38,19 @@ struct GameView: View {
         ZStack {
             Theme.lane.ignoresSafeArea()
             if let result = session.result {
-                ResultsView(session: session, result: result, accidentals: settings.settings.accidentals) {
-                    Task {
-                        await audio.acquire("game")
-                        session.restart()
-                    }
-                } onDone: {
-                    dismiss()
-                }
+                ResultsView(
+                    session: session,
+                    result: result,
+                    accidentals: settings.settings.accidentals,
+                    onAgain: {
+                        Task {
+                            await audio.acquire("game")
+                            session.restart()
+                        }
+                    },
+                    onDone: { dismiss() },
+                    onPractice: onPractice
+                )
             } else if audio.state == .permissionDenied {
                 // Same explanation + Settings link as the other mic screens.
                 MicrophonePermissionView(onBack: { dismiss() })
@@ -457,9 +467,12 @@ struct ResultsView: View {
     let accidentals: Accidentals
     let onAgain: () -> Void
     let onDone: () -> Void
+    /// Starts a practice run of a line (nil = not offered).
+    var onPractice: ((PracticeOptions) -> Void)?
     @ScaledMetric(relativeTo: .largeTitle) private var gradeSize: CGFloat = 72
     @State private var revealed = false
     @State private var shownScore = 0
+    @State private var toughest: LineReport.Line?
 
     /// Confetti for a great run.
     private var celebrates: Bool { !result.failed && (result.grade == .s || result.grade == .a || session.isNewBest) }
@@ -507,6 +520,12 @@ struct ResultsView: View {
                         .font(.subheadline)
                         .foregroundStyle(Theme.textSecondary)
                 }
+                if !session.newBadges.isEmpty {
+                    newBadges
+                }
+                if let line = toughest, let onPractice {
+                    toughestLine(line, onPractice: onPractice)
+                }
                 Text("\(session.song.title) · \(result.difficulty.displayName)\(result.octaveAgnostic ? " · any octave" : "")")
                     .font(.caption)
                     .foregroundStyle(Theme.textSecondary)
@@ -547,7 +566,63 @@ struct ResultsView: View {
         .onAppear {
             withAnimation(.spring(response: 0.55, dampingFraction: 0.55).delay(0.1)) { revealed = true }
             withAnimation(.easeOut(duration: 1.2).delay(0.25)) { shownScore = result.score }
+            // Full runs only: a loop's results cover just that section.
+            if session.options.practice.loop == nil {
+                toughest = LineReport(song: session.song, results: session.results).toughest
+            }
         }
+    }
+
+    private var newBadges: some View {
+        VStack(alignment: .leading, spacing: 6) {
+            Text(session.newBadges.count == 1 ? "NEW BADGE" : "NEW BADGES")
+                .font(.system(.caption, design: .rounded).weight(.heavy))
+                .tracking(2)
+                .foregroundStyle(Theme.gold)
+            ForEach(session.newBadges) { badge in
+                HStack(spacing: 10) {
+                    BadgeCoin(badge: badge, size: 34)
+                    VStack(alignment: .leading, spacing: 1) {
+                        Text(badge.title)
+                            .font(.subheadline.weight(.bold))
+                            .foregroundStyle(Theme.textPrimary)
+                        Text(badge.detail)
+                            .font(.caption)
+                            .foregroundStyle(Theme.textSecondary)
+                    }
+                }
+            }
+        }
+    }
+
+    private func toughestLine(_ line: LineReport.Line, onPractice: @escaping (PracticeOptions) -> Void) -> some View {
+        VStack(alignment: .leading, spacing: 6) {
+            Text("TOUGHEST LINE")
+                .font(.system(.caption, design: .rounded).weight(.heavy))
+                .tracking(2)
+                .foregroundStyle(Theme.accentSecondary)
+            Text(line.text.isEmpty ? "\(Self.clock(line.start)) to \(Self.clock(line.end))" : "\u{201C}\(line.text)\u{201D}")
+                .font(.subheadline.weight(.semibold))
+                .foregroundStyle(Theme.textPrimary)
+                .lineLimit(2)
+            Text("\(Int((line.accuracy * 100).rounded()))% on this line. Loop it at 80% speed, no failing.")
+                .font(.caption)
+                .foregroundStyle(Theme.textSecondary)
+            Button {
+                AppLog.info("Practising the toughest line (\(Int((line.accuracy * 100).rounded())) %)", category: "game")
+                onPractice(LineReport.practice(for: line))
+            } label: {
+                Label("PRACTICE THIS LINE", systemImage: "repeat")
+            }
+            .buttonStyle(ChunkyButtonStyle(color: Theme.violet, height: 42))
+        }
+        .padding(12)
+        .background(Theme.surface.opacity(0.75), in: RoundedRectangle(cornerRadius: 14, style: .continuous))
+    }
+
+    private static func clock(_ seconds: Double) -> String {
+        let total = max(0, Int(seconds.rounded()))
+        return String(format: "%d:%02d", total / 60, total % 60)
     }
 
     private var gradeColor: Color {

@@ -33,7 +33,9 @@ public struct PlayerProgress: Sendable, Equatable {
     public init(history: GameHistory, now: Date = Date(), calendar: Calendar = .current) {
         let records = history.records
         runs = records.count
+        // Plus the song-of-the-day bonus for the first completed run of each day's song.
         experience = records.reduce(0) { $0 + Self.experience(for: $1) }
+            + DailySong.bonusRecords(records, calendar: calendar).count * DailySong.bonusExperience
         var level = 1
         var remaining = experience
         while remaining >= Self.levelSize(level), level < 999 {

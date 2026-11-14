@@ -44,6 +44,7 @@ struct LibraryView: View {
 
     var body: some View {
         List {
+            favoritesSection
             importedSection
             builtInSection(title: "Sample Songs", kinds: BuiltInKind.allCases.filter { !$0.isOriginal })
             builtInSection(title: "PitchLane Originals", kinds: BuiltInKind.allCases.filter(\.isOriginal))
@@ -63,6 +64,17 @@ struct LibraryView: View {
         .toolbar {
             ToolbarItem(placement: .topBarTrailing) {
                 Button("Search by Voice", systemImage: "mic") { showVoice = true }
+            }
+            ToolbarItem(placement: .topBarTrailing) {
+                Menu {
+                    Picker("Sort Your Songs", selection: $settings.settings.librarySort) {
+                        ForEach(LibrarySort.allCases) { sort in
+                            Label(sort.displayName, systemImage: sort.symbol).tag(sort)
+                        }
+                    }
+                } label: {
+                    Label("Sort", systemImage: "arrow.up.arrow.down")
+                }
             }
             ToolbarItem(placement: .topBarTrailing) {
                 Menu {
@@ -178,9 +190,78 @@ struct LibraryView: View {
         }
     }
 
+    /// Favourite songs (yours in the chosen order, then built-ins), when there are any.
+    @ViewBuilder
+    private var favoritesSection: some View {
+        let keys = Set(settings.settings.favoriteSongs)
+        let songs = settings.settings.librarySort.sorted(
+            library.imported.filter { keys.contains($0.id) && library.matches($0, query: query) }, history: scores.history
+        )
+        let kinds = BuiltInKind.allCases.filter { keys.contains(AppSettings.favoriteKey($0)) && builtInMatches($0) }
+        if !songs.isEmpty || !kinds.isEmpty {
+            Section("Favourites") {
+                ForEach(songs) { song in importedRow(song) }
+                ForEach(kinds) { kind in builtInRow(kind) }
+            }
+        }
+    }
+
+    private func favoriteButton(_ key: String, title: String) -> some View {
+        let isFavorite = settings.settings.isFavorite(key)
+        return Button {
+            settings.settings.toggleFavorite(key)
+            AppLog.info("\(isFavorite ? "Removed a favourite" : "Added a favourite")", category: "library")
+        } label: {
+            Label(isFavorite ? "Remove from Favourites" : "Add to Favourites", systemImage: isFavorite ? "star.slash" : "star")
+        }
+        .tint(Theme.gold)
+        .accessibilityHint(title)
+    }
+
+    private func importedRow(_ song: Song) -> some View {
+        Button {
+            selection = .imported(song.id)
+        } label: {
+            SongRow(
+                title: song.title,
+                subtitle: [song.artist, song.sourceName].filter { !$0.isEmpty }.joined(separator: " · "),
+                summary: song.summary,
+                accidentals: settings.settings.accidentals,
+                badge: song.videoFile != nil ? "film" : (song.backingAudioFile == nil ? nil : "music.note"),
+                grade: bestGrade([song.id]),
+                favorite: settings.settings.isFavorite(song.id)
+            )
+        }
+        .swipeActions(edge: .leading) { favoriteButton(song.id, title: song.title) }
+        .contextMenu { favoriteButton(song.id, title: song.title) }
+    }
+
+    private func builtInRow(_ kind: BuiltInKind) -> some View {
+        Button {
+            selection = .builtIn(kind)
+        } label: {
+            SongRow(
+                title: kind.title,
+                subtitle: kind.subtitle + " · Easy / Normal / Hard",
+                summary: BuiltInSongs.song(kind, .normal).summary,
+                accidentals: settings.settings.accidentals,
+                badge: nil,
+                grade: bestGrade(Difficulty.allCases.map { BuiltInSongs.song(kind, $0).id }),
+                favorite: settings.settings.isFavorite(AppSettings.favoriteKey(kind))
+            )
+        }
+        .swipeActions(edge: .leading) { favoriteButton(AppSettings.favoriteKey(kind), title: kind.title) }
+        .contextMenu { favoriteButton(AppSettings.favoriteKey(kind), title: kind.title) }
+    }
+
+    private func builtInMatches(_ kind: BuiltInKind) -> Bool {
+        SongSearch.matches(BuiltInSongs.song(kind, .normal), query: query)
+            || kind.subtitle.range(of: query, options: [.caseInsensitive, .diacriticInsensitive]) != nil
+    }
+
     @ViewBuilder
     private var importedSection: some View {
-        let songs = library.imported.filter { library.matches($0, query: query) }
+        let songs = settings.settings.librarySort.sorted(library.imported.filter { library.matches($0, query: query) }, history: scores.history)
         Section("Imported") {
             if library.imported.isEmpty {
                 Text("Tap + to import UltraStar .txt or MIDI files from Files. Pick an .mp3, .m4a or .wav with it to add backing audio.")
@@ -192,18 +273,7 @@ struct LibraryView: View {
                     .foregroundStyle(Theme.textSecondary)
             }
             ForEach(songs) { song in
-                Button {
-                    selection = .imported(song.id)
-                } label: {
-                    SongRow(
-                        title: song.title,
-                        subtitle: [song.artist, song.sourceName].filter { !$0.isEmpty }.joined(separator: " · "),
-                        summary: song.summary,
-                        accidentals: settings.settings.accidentals,
-                        badge: song.videoFile != nil ? "film" : (song.backingAudioFile == nil ? nil : "music.note"),
-                        grade: bestGrade([song.id])
-                    )
-                }
+                importedRow(song)
             }
             .onDelete { offsets in
                 if let index = offsets.first { pendingDelete = songs[index] }
@@ -213,25 +283,11 @@ struct LibraryView: View {
 
     @ViewBuilder
     private func builtInSection(title: String, kinds: [BuiltInKind]) -> some View {
-        let visible = kinds.filter { kind in
-            SongSearch.matches(BuiltInSongs.song(kind, .normal), query: query)
-                || kind.subtitle.range(of: query, options: [.caseInsensitive, .diacriticInsensitive]) != nil
-        }
+        let visible = kinds.filter(builtInMatches)
         if !visible.isEmpty {
             Section(title) {
                 ForEach(visible) { kind in
-                    Button {
-                        selection = .builtIn(kind)
-                    } label: {
-                        SongRow(
-                            title: kind.title,
-                            subtitle: kind.subtitle + " · Easy / Normal / Hard",
-                            summary: BuiltInSongs.song(kind, .normal).summary,
-                            accidentals: settings.settings.accidentals,
-                            badge: nil,
-                            grade: bestGrade(Difficulty.allCases.map { BuiltInSongs.song(kind, $0).id })
-                        )
-                    }
+                    builtInRow(kind)
                 }
             }
         }
@@ -245,6 +301,7 @@ struct SongRow: View {
     let accidentals: Accidentals
     let badge: String?
     var grade: Grade?
+    var favorite = false
 
     var body: some View {
         HStack(spacing: 12) {
@@ -266,6 +323,12 @@ struct SongRow: View {
                         Image(systemName: badge)
                             .font(.caption)
                             .foregroundStyle(Theme.accent)
+                    }
+                    if favorite {
+                        Image(systemName: "star.fill")
+                            .font(.caption)
+                            .foregroundStyle(Theme.gold)
+                            .accessibilityLabel("Favourite")
                     }
                 }
                 if !subtitle.isEmpty {

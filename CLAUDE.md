@@ -216,6 +216,12 @@ Runs on every push and PR:
   `onlySungNotes`) only ever removes notes from `SongSource.video` songs, only when heard words exist, and keeps at
   least 3 notes; never from UltraStar/MIDI imports or built-ins.
 
+## Badges, daily song, library order (step 18)
+
+- Badges (`Achievements`), the song of the day (`DailySong`, built-ins only so past bonuses never change) and the
+  Library order (`LibrarySort`) are Core and tested, derived from the history; don't store badge state separately.
+  `LineReport` only judges full runs (not loop sections). Favourites live in `AppSettings.favoriteSongs`.
+
 ## Menu look (step 11)
 
 - Menus use `GameUI.swift` (`GameBackdrop`, `ChunkyButtonStyle`, `GameTile`, `GradeBadge`, `NeonTitle`, `PlayerCard`).

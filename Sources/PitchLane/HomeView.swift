@@ -36,6 +36,7 @@ struct HomeView: View {
     @State private var path: [Route] = []
     @EnvironmentObject private var audio: AudioInput
     @EnvironmentObject private var scores: ScoreStore
+    @EnvironmentObject private var settings: SettingsModel
     @State private var pulse = false
 
     private let columns = [GridItem(.flexible(), spacing: 14), GridItem(.flexible(), spacing: 14)]
@@ -48,6 +49,7 @@ struct HomeView: View {
                     VStack(spacing: 22) {
                         header
                         PlayerCard(progress: PlayerProgress(history: scores.history))
+                        dailySong
                         NavigationLink(value: Route.play) {
                             HStack(spacing: 12) {
                                 Image(systemName: "play.fill")
@@ -94,7 +96,7 @@ struct HomeView: View {
                 switch route {
                 case .play: LibraryView(title: "Choose a Song", onPlay: play)
                 case .library: LibraryView(title: "Library", onPlay: play)
-                case .game(let route): GameScreen(route: route)
+                case .game(let route): GameScreen(route: route) { plan in replay(route, with: plan) }
                 case .latency: CalibrationView()
                 case .practice: PracticeHubView()
                 case .rangeTest: RangeTestView()
@@ -147,11 +149,32 @@ struct HomeView: View {
         .accessibilityLabel("PitchLane")
     }
 
+    private var dailySong: some View {
+        let now = Date()
+        let kind = DailySong.kind(for: now)
+        return DailySongCard(kind: kind, done: DailySong.isDone(records: scores.history.records, on: now)) {
+            let id = BuiltInSongs.id(kind, .normal)
+            AppLog.info("Song of the day: \(kind.rawValue)", category: "ui")
+            path.append(.game(GameRoute(songID: id, plan: GamePlan(difficulty: .normal, transpose: settings.settings.transpose(for: id)))))
+        }
+    }
+
     private func tile(_ title: String, _ detail: String, _ symbol: String, _ color: Color, _ route: Route) -> some View {
         NavigationLink(value: route) {
             GameTile(title: title, detail: detail, symbol: symbol, color: color)
         }
         .buttonStyle(PressableStyle())
+    }
+
+    /// Leaves the game and starts the same song again with another plan (e.g. "Practice this line"), once the old
+    /// game screen has gone (so it releases the microphone before the new one takes it).
+    private func replay(_ route: GameRoute, with plan: GamePlan) {
+        guard case .game = path.last else { return }
+        path.removeLast()
+        Task { @MainActor in
+            try? await Task.sleep(for: .milliseconds(450))
+            path.append(.game(GameRoute(songID: route.songID, plan: plan)))
+        }
     }
 
     /// Starts a game once the song sheet has finished dismissing.
@@ -160,6 +183,49 @@ struct HomeView: View {
             try? await Task.sleep(for: .milliseconds(350))
             path.append(.game(GameRoute(songID: song.id, plan: plan)))
         }
+    }
+}
+/// Home: today's built-in song, with the bonus for finishing it (Core `DailySong`).
+struct DailySongCard: View {
+    let kind: BuiltInKind
+    let done: Bool
+    let onPlay: () -> Void
+
+    var body: some View {
+        Button(action: onPlay) {
+            HStack(spacing: 14) {
+                ZStack {
+                    Circle().fill(Theme.gold.opacity(0.18))
+                    Image(systemName: done ? "checkmark.seal.fill" : "sun.max.fill")
+                        .font(.title2.weight(.bold))
+                        .foregroundStyle(Theme.gold)
+                }
+                .frame(width: 50, height: 50)
+                VStack(alignment: .leading, spacing: 2) {
+                    Text("SONG OF THE DAY")
+                        .font(.system(.caption2, design: .rounded).weight(.heavy))
+                        .tracking(2)
+                        .foregroundStyle(Theme.gold)
+                    Text(kind.title)
+                        .font(.system(.headline, design: .rounded).weight(.bold))
+                        .foregroundStyle(Theme.textPrimary)
+                    Text(done ? "Done today. A new song tomorrow." : "+\(DailySong.bonusExperience) XP for your first finish today")
+                        .font(.caption)
+                        .foregroundStyle(Theme.textSecondary)
+                }
+                Spacer(minLength: 0)
+                Image(systemName: "play.fill")
+                    .font(.headline)
+                    .foregroundStyle(Theme.accent)
+            }
+            .padding(14)
+            .background(Theme.surface.opacity(0.85), in: RoundedRectangle(cornerRadius: 18, style: .continuous))
+            .overlay(RoundedRectangle(cornerRadius: 18, style: .continuous).strokeBorder(Theme.gold.opacity(done ? 0.2 : 0.5), lineWidth: 1.5))
+        }
+        .buttonStyle(PressableStyle())
+        .accessibilityElement(children: .combine)
+        .accessibilityLabel("Song of the day: \(kind.title)\(done ? ", done today" : "")")
+        .accessibilityHint("Plays it on Normal")
     }
 }
 #endif

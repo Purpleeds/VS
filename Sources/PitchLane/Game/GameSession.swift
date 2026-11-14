@@ -61,6 +61,8 @@ final class GameSession: ObservableObject {
     @Published private(set) var accuracy = 0.0
     @Published private(set) var result: GameResult?
     @Published private(set) var isNewBest = false
+    /// Badges this run earned (Core `Achievements`), for the results screen.
+    @Published private(set) var newBadges: [Badge] = []
     @Published private(set) var previousBest: PersonalBest?
     @Published private(set) var results: [NoteResult] = []
     @Published private(set) var guideOn: Bool
@@ -294,6 +296,7 @@ final class GameSession: ObservableObject {
         results = []
         result = nil
         isNewBest = false
+        newBadges = []
         trail = []
         latestVoiced = nil
         latestFrameSongTime = -.infinity
@@ -598,7 +601,12 @@ final class GameSession: ObservableObject {
         var summary = keeper.result(songID: song.id, songTitle: song.title)
         summary.failed = didFail
         failed = didFail
+        let before = scores?.history.records ?? []
         isNewBest = scores?.record(summary, practice: options.practice, transpose: options.transpose) ?? false
+        newBadges = Achievements.newlyEarned(before: before, after: scores?.history.records ?? [])
+        if !newBadges.isEmpty {
+            AppLog.info("Badges earned: \(newBadges.map(\.rawValue).joined(separator: ", "))", category: "game")
+        }
         if options.haptics, !didFail {
             UINotificationFeedbackGenerator().notificationOccurred(isNewBest ? .success : .warning)
         }

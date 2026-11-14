@@ -106,6 +106,37 @@ private func trendSummary(_ points: [TrendPoint]) -> some View {
     }
 }
 
+/// Every badge: earned ones glow, the rest are locked with what it takes to earn them.
+struct BadgeGrid: View {
+    let earned: Set<Badge>
+
+    private let columns = [GridItem(.adaptive(minimum: 92), spacing: 10)]
+
+    var body: some View {
+        LazyVGrid(columns: columns, spacing: 12) {
+            ForEach(Badge.allCases) { badge in
+                let has = earned.contains(badge)
+                VStack(spacing: 5) {
+                    BadgeCoin(badge: badge, earned: has, size: 46)
+                    Text(badge.title)
+                        .font(.system(.caption, design: .rounded).weight(.bold))
+                        .foregroundStyle(has ? Theme.textPrimary : Theme.textSecondary)
+                        .multilineTextAlignment(.center)
+                        .lineLimit(2)
+                    Text(badge.detail)
+                        .font(.caption2)
+                        .foregroundStyle(Theme.textSecondary)
+                        .multilineTextAlignment(.center)
+                        .lineLimit(2)
+                }
+                .frame(maxWidth: .infinity)
+                .opacity(has ? 1 : 0.7)
+                .accessibilityElement(children: .combine)
+            }
+        }
+    }
+}
+
 struct StatsView: View {
     @EnvironmentObject private var scores: ScoreStore
     @EnvironmentObject private var settings: SettingsModel
@@ -117,6 +148,14 @@ struct StatsView: View {
                 PlayerCard(progress: PlayerProgress(history: scores.history))
                     .listRowBackground(Color.clear)
                     .listRowInsets(EdgeInsets(top: 4, leading: 0, bottom: 4, trailing: 0))
+            }
+            Section {
+                BadgeGrid(earned: Set(Achievements.earned(scores.history.records).keys))
+                    .listRowBackground(Color.clear)
+                    .listRowInsets(EdgeInsets(top: 8, leading: 0, bottom: 8, trailing: 0))
+            } header: {
+                let count = Achievements.earned(scores.history.records).count
+                Text("Badges · \(count) of \(Badge.allCases.count)")
             }
             Section("Accuracy trend") {
                 VStack(alignment: .leading, spacing: 10) {

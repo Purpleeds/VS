@@ -45,6 +45,10 @@ public struct AppSettings: Codable, Equatable, Sendable {
     public var haptics: Bool
     /// Songs PitchLane writes from a recording keep only notes where words are sung (no humming along to solos).
     public var onlySungNotes: Bool
+    /// Favourite songs (imported song ids, or "builtin.<kind>" for built-ins), newest first.
+    public var favoriteSongs: [String]
+    /// How the Library orders imported songs.
+    public var librarySort: LibrarySort
     /// Guide tone on for Easy/Normal (default on) and Hard (default off).
     public var guideOnEasyNormal: Bool
     public var guideOnHard: Bool
@@ -73,7 +77,9 @@ public struct AppSettings: Codable, Equatable, Sendable {
         autoLyrics: Bool = true,
         uploadLanguage: String? = nil,
         haptics: Bool = true,
-        onlySungNotes: Bool = true
+        onlySungNotes: Bool = true,
+        favoriteSongs: [String] = [],
+        librarySort: LibrarySort = .title
     ) {
         self.debugOverlay = debugOverlay
         self.accidentals = accidentals
@@ -99,9 +105,32 @@ public struct AppSettings: Codable, Equatable, Sendable {
         self.uploadLanguage = uploadLanguage
         self.haptics = haptics
         self.onlySungNotes = onlySungNotes
+        self.favoriteSongs = Self.cleanFavorites(favoriteSongs)
+        self.librarySort = librarySort
     }
 
     public static let noiseGateRange: ClosedRange<Double> = -65 ... -30
+    public static let maximumFavorites = 500
+
+    /// Favourite key of a built-in song (all its difficulties share it).
+    public static func favoriteKey(_ kind: BuiltInKind) -> String { "builtin.\(kind.rawValue)" }
+
+    public func isFavorite(_ key: String) -> Bool { favoriteSongs.contains(key) }
+
+    /// Adds or removes a favourite (new ones go first).
+    public mutating func toggleFavorite(_ key: String) {
+        if let index = favoriteSongs.firstIndex(of: key) {
+            favoriteSongs.remove(at: index)
+        } else {
+            favoriteSongs = Self.cleanFavorites([key] + favoriteSongs)
+        }
+    }
+
+    /// Non-empty, short, unique, at most `maximumFavorites`.
+    static func cleanFavorites(_ keys: [String]) -> [String] {
+        var seen = Set<String>()
+        return Array(keys.filter { !$0.isEmpty && $0.count <= 200 && seen.insert($0).inserted }.prefix(maximumFavorites))
+    }
 
     /// The pipeline settings these choices imply.
     public func pipelineConfiguration() -> PitchPipelineConfiguration {
@@ -147,6 +176,8 @@ public struct AppSettings: Codable, Equatable, Sendable {
         case uploadLanguage
         case haptics
         case onlySungNotes
+        case favoriteSongs
+        case librarySort
     }
 
     public init(from decoder: Decoder) throws {
@@ -176,6 +207,9 @@ public struct AppSettings: Codable, Equatable, Sendable {
         self.uploadLanguage = container.lenient(String.self, forKey: .uploadLanguage).flatMap { $0.isEmpty ? nil : $0 }
         self.haptics = container.lenient(Bool.self, forKey: .haptics) ?? true
         self.onlySungNotes = container.lenient(Bool.self, forKey: .onlySungNotes) ?? true
+        let favorites = (try? container.decodeIfPresent([Lossy<String>].self, forKey: .favoriteSongs)) ?? nil
+        self.favoriteSongs = Self.cleanFavorites((favorites ?? []).compactMap(\.value))
+        self.librarySort = container.lenient(LibrarySort.self, forKey: .librarySort) ?? .title
     }
 }
 

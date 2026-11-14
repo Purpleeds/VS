@@ -259,4 +259,28 @@ struct PlayerCard: View {
         .accessibilityLabel("Level \(progress.level), \(progress.levelExperience) of \(progress.levelSize) experience, \(progress.streakDays) day streak, \(progress.runs) runs")
     }
 }
+/// A badge: its symbol on a glowing coin, or dim with a lock while it isn't earned yet.
+struct BadgeCoin: View {
+    let badge: Badge
+    var earned = true
+    var size: CGFloat = 44
+
+    var body: some View {
+        ZStack {
+            if earned {
+                Circle().fill(LinearGradient(colors: [Theme.gold, Theme.accentSecondary], startPoint: .topLeading, endPoint: .bottomTrailing))
+            } else {
+                Circle().fill(Theme.surface)
+            }
+            Circle().strokeBorder(.white.opacity(earned ? 0.35 : 0.1), lineWidth: 1.5)
+            Image(systemName: earned ? badge.symbol : "lock.fill")
+                .font(.system(size: size * 0.42, weight: .bold))
+                .foregroundStyle(earned ? Theme.backdropBottom : Theme.textSecondary)
+        }
+        .frame(width: size, height: size)
+        .shadow(color: earned ? Theme.gold.opacity(0.5) : .clear, radius: 8)
+        .accessibilityElement()
+        .accessibilityLabel("\(badge.title)\(earned ? "" : ", locked"): \(badge.detail)")
+    }
+}
 #endif

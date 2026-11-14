@@ -7,7 +7,7 @@
 	<key>CFBundleShortVersionString</key>
 	<string>0.1.0</string>
 	<key>CFBundleVersion</key>
-	<string>5</string>
+	<string>6</string>
 	<key>NSMicrophoneUsageDescription</key>
 	<string>PitchLane listens to your voice to show your pitch. Audio never leaves your phone.</string>
 	<key>NSSpeechRecognitionUsageDescription</key>

@@ -47,7 +47,7 @@ final class WordNotesTests: XCTestCase {
         XCTAssertEqual(result.notes[0].start, 0.2, accuracy: 1e-9)
         XCTAssertEqual(result.notes[0].end, 0.8, accuracy: 1e-9)
         XCTAssertEqual(result.borrowedPitch, 0)
-        XCTAssertEqual(result.lineBreaks, [1.1]) // a pause of 0.3 s doesn't start a line...
+        XCTAssertEqual(result.lineBreaks, []) // a pause of 0.3 s does not start a new line
     }
 
     func testAMelismaSplitsIntoHeldNotesThatGlide() {

@@ -32,6 +32,20 @@ public struct Biquad: Sendable {
         )
     }
 
+    public static func highPass(sampleRate: Double, cutoff: Double, q: Double) -> Biquad {
+        let w0 = 2 * Double.pi * cutoff / sampleRate
+        let cosW = cos(w0)
+        let alpha = sin(w0) / (2 * q)
+        let a0 = 1 + alpha
+        return Biquad(
+            b0: Float((1 + cosW) / 2 / a0),
+            b1: Float(-(1 + cosW) / a0),
+            b2: Float((1 + cosW) / 2 / a0),
+            a1: Float(-2 * cosW / a0),
+            a2: Float((1 - alpha) / a0)
+        )
+    }
+
     @inline(__always)
     public mutating func process(_ x: Float) -> Float {
         let y = b0 * x + z1

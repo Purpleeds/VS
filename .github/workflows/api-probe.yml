@@ -1,0 +1,29 @@
+name: API probe (temporary)
+
+# One-off: prints parts of the iOS SDK's Speech interface so app code can use exact API names. Delete after use.
+on:
+  workflow_dispatch:
+
+jobs:
+  probe:
+    runs-on: macos-26
+    timeout-minutes: 10
+    steps:
+      - name: Speech interface
+        run: |
+          XCODE=$(ls -d /Applications/Xcode_2[6-9]*.app 2>/dev/null | tail -1 || true)
+          if [ -n "$XCODE" ]; then sudo xcode-select -s "$XCODE"; fi
+          SDK="$(xcrun --sdk iphoneos --show-sdk-path)"
+          F=$(find "$SDK/System/Library/Frameworks/Speech.framework" -name "arm64e-apple-ios.swiftinterface" | head -1)
+          echo "Interface: $F"
+          echo "=== alternatives ==="
+          grep -n -i "alternative" "$F" | head -60
+          echo "=== SpeechTranscriber.Result ==="
+          awk '/extension Speech.SpeechTranscriber/{p=1} p&&/struct Result/{q=1} q{print; n++} n>60{exit}' "$F"
+          echo "=== Confidence / attributes ==="
+          grep -n -i "confidence\|TimeRangeAttribute\|SpeechAttributes" "$F" | head -40
+          echo "=== AnalysisContext ==="
+          grep -n "AnalysisContext\|contextualStrings\|setContext" "$F" | head -30
+          echo "=== SFTranscriptionSegment (objc header) ==="
+          H=$(find "$SDK/System/Library/Frameworks/Speech.framework" -name "SFTranscriptionSegment.h" | head -1)
+          grep -n "alternativeSubstrings\|confidence" "$H" || true

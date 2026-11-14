@@ -26,6 +26,8 @@ public final class StemSeparator {
         public var musicLeft: [Float] = []
         public var musicRight: [Float] = []
 
+        public init() {}
+
         public var count: Int { vocalsLeft.count }
 
         mutating func reserve(_ n: Int) {
